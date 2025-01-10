@@ -435,19 +435,11 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Передаем информацию о пользователе в шаблон
 	data := struct {
-		UserID      int
-		DisplayName string
-		FullName    string
-		Login       string
-		Birthday    string
-		Region      int
+		UserID   int
+		FullName string
 	}{
-		UserID:      accountStatus.Result.Account.UID,
-		DisplayName: accountStatus.Result.Account.DisplayName,
-		FullName:    accountStatus.Result.Account.FullName,
-		Login:       accountStatus.Result.Account.Login,
-		Birthday:    accountStatus.Result.Account.Birthday,
-		Region:      accountStatus.Result.Account.Region,
+		UserID:   accountStatus.Result.Account.UID,
+		FullName: accountStatus.Result.Account.FullName,
 	}
 
 	// Отображаем шаблон с данными
@@ -616,6 +608,14 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 		defer db.Close()
 	} else {
 		data.Database.Connected = false
+	}
+
+	// Данные аккаунта Яндекс Музыки
+	accountStatus, _, err := client.Account().GetStatus(r.Context())
+	if err == nil {
+		data.Environment["YandexMusicUserID"] = strconv.Itoa(accountStatus.Result.Account.UID)
+		data.Environment["YandexMusicDisplayName"] = accountStatus.Result.Account.DisplayName
+		data.Environment["YandexMusicLogin"] = accountStatus.Result.Account.Login
 	}
 
 	// Получаем статистику памяти
