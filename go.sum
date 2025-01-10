@@ -1,0 +1,4 @@
+github.com/mattn/go-sqlite3 v1.14.24 h1:tpSp2G2KyMnnQu99ngJ47EIkWVmliIizyZBfPrBWDRM=
+github.com/mattn/go-sqlite3 v1.14.24/go.mod h1:Uh1q+B4BYcTPb+yiD3kU8Ct7aC0hY9fxUwlHK0RXw+Y=
+pkg.botr.me/yamusic v1.2.0 h1:wMzDd3xqul1KutYPDIYQPDqLYBExcsADM/FV8yAr4dA=
+pkg.botr.me/yamusic v1.2.0/go.mod h1:97xIFEArN1lHXDrF+Y490Pdj2oZKokjitzafn8jWqwM=

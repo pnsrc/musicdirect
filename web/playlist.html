@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Музыкальный плеер</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Font Awesome -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+
+  <style>
+    :root {
+      --accent-color: hsl(222, 84%, 60%);
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      color: white;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: #071c39;
+      overflow: hidden;
+    }
+
+    .gradient {
+      --size: 750px;
+      --speed: 50s;
+      --easing: cubic-bezier(0.8, 0.2, 0.2, 0.8);
+
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: var(--size);
+      height: var(--size);
+      filter: blur(calc(var(--size) / 5));
+      background-image: linear-gradient(var(--accent-color), hsl(164, 79%, 71%));
+      animation: rotate var(--speed) var(--easing) alternate infinite;
+      border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
+      z-index: -1;
+      transition: background-image 0.8s ease-in-out;
+    }
+
+    @media (min-width: 720px) {
+      .gradient {
+        --size: 500px;
+      }
+    }
+
+    @keyframes rotate {
+      0% {
+        transform: rotate(0deg);
+      }
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+
+    .container {
+      display: grid;
+      grid-template-columns: 1fr 2fr 1fr;
+      gap: 20px;
+      height: 80%;
+      width: 90%;
+      overflow: hidden;
+      position: relative;
+      z-index: 1;
+    }
+
+    .cover-container img {
+      width: 100%;
+      max-width: 400px;
+      border-radius: 16px;
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .lyrics-container h1 {
+      font-size: 2rem;
+      font-weight: bold;
+      margin-bottom: 20px;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .lyrics-container p {
+      font-size: 1rem;
+      margin-bottom: 20px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .progress-container {
+      width: 100%;
+      margin-top: 20px;
+    }
+
+    .progress-bar {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.3);
+      height: 5px;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress {
+      background-color: var(--accent-color);
+      height: 100%;
+      width: 0;
+    }
+
+    .player-controls {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 20px;
+      gap: 20px;
+    }
+
+    .player-controls button {
+      background: var(--accent-color);
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      font-size: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transition: background-color 0.3s;
+    }
+
+    .player-controls button:hover {
+      background: hsl(222, 84%, 50%);
+    }
+
+    .playlist-container {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 16px;
+      padding: 20px;
+      overflow-y: auto;
+      max-height: 100%;
+    }
+
+    .playlist-container h2 {
+      font-size: 1.5rem;
+      margin-bottom: 20px;
+      color: white;
+    }
+
+    .track {
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    .track:hover {
+      background-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .track img {
+      width: 50px;
+      height: 50px;
+      border-radius: 8px;
+      margin-right: 10px;
+    }
+
+    .track-info {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .track-title {
+      font-weight: bold;
+      font-size: 1rem;
+      color: white;
+    }
+
+    .track-artist {
+      font-size: 0.8rem;
+      color: #ddd;
+    }
+
+    .modal-content {
+      background-color: #1d1d1d;
+      color: white;
+    }
+
+    .btn-close {
+      filter: invert(1);
+    }
+  </style>
+</head>
+<body>
+  <div class="gradient"></div>
+  <div class="container">
+    <!-- Album Cover -->
+    <div class="cover-container">
+      <img src="https://via.placeholder.com/400" alt="Album Cover" id="cover-img">
+    </div>
+
+    <!-- Lyrics and Player -->
+    <div class="lyrics-container">
+      <h1 id="current-track-title">Выберите трек</h1>
+      <p id="current-track-artist">Исполнитель</p>
+      <div class="progress-container">
+        <div class="progress-bar">
+          <div class="progress" id="progress"></div>
+        </div>
+      </div>
+      <div class="player-controls">
+        <button id="prev"><i class="fas fa-backward"></i></button>
+        <button id="play-pause"><i class="fas fa-play"></i></button>
+        <button id="next"><i class="fas fa-forward"></i></button>
+      </div>
+      <p id="current-time">0:00 / 0:00</p>
+    </div>
+
+    <!-- Playlist -->
+    <div class="playlist-container">
+      <h2>Плейлист</h2>
+      <div id="track-list">
+        <!-- Tracks dynamically loaded here -->
+      </div>
+      <button class="btn btn-primary w-100 mt-4" data-bs-toggle="modal" data-bs-target="#addTrackModal">Добавить трек</button>
+    </div>
+  </div>
+
+  <!-- Add Track Modal -->
+  <div class="modal fade" id="addTrackModal" tabindex="-1" aria-labelledby="addTrackModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Добавить трек</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <label for="track-url" class="form-label">URL трека:</label>
+          <input type="text" id="track-url" class="form-control" placeholder="https://example.com/track.mp3">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Закрыть</button>
+          <button type="button" class="btn btn-primary" id="add-track-btn">Добавить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.1/howler.min.js"></script>
+  <script>
+    let tracks = [];
+    let currentTrackIndex = 0;
+    let player = null;
+    let progressInterval;
+
+    async function loadTrackList() {
+      try {
+        const response = await fetch('http://localhost:8080/api/tracks');
+        if (!response.ok) throw new Error('Ошибка сети');
+        tracks = await response.json();
+
+        const trackListContainer = document.getElementById('track-list');
+        trackListContainer.innerHTML = '';
+        tracks.forEach((track, index) => {
+          const trackItem = document.createElement('div');
+          trackItem.className = 'track';
+          trackItem.dataset.index = index;
+          trackItem.innerHTML = `
+            <img src="https://${track.cover_uri}200x200" alt="${track.title}">
+            <div class="track-info">
+              <div class="track-title">${track.title}</div>
+              <div class="track-artist">${track.artist}</div>
+            </div>
+          `;
+          trackItem.addEventListener('click', () => playTrack(index));
+          trackListContainer.appendChild(trackItem);
+        });
+      } catch (error) {
+        console.error('Ошибка загрузки треков:', error);
+      }
+    }
+
+    function playTrack(index) {
+      if (player) player.stop();
+      player = new Howl({
+        src: [tracks[index].track_url],
+        html5: true,
+        onend: () => playNext(),
+        onplay: updateProgress
+      });
+      player.play();
+      currentTrackIndex = index;
+
+      const track = tracks[index];
+      document.getElementById('current-track-title').textContent = track.title;
+      document.getElementById('current-track-artist').textContent = track.artist;
+      document.getElementById('cover-img').src = `https://${track.cover_uri}200x200`;
+
+      // Change accent color
+      const hue = Math.floor(Math.random() * 360);
+      document.documentElement.style.setProperty('--accent-color', `hsl(${hue}, 84%, 60%)`);
+
+      updatePlayPauseIcon(true);
+    }
+
+    function playNext() {
+      currentTrackIndex = (currentTrackIndex + 1) % tracks.length;
+      playTrack(currentTrackIndex);
+    }
+
+    function updateProgress() {
+      if (progressInterval) clearInterval(progressInterval);
+      progressInterval = setInterval(() => {
+        const currentTime = player.seek() || 0;
+        const duration = player.duration() || 0;
+        const progress = (currentTime / duration) * 100;
+
+        document.getElementById('progress').style.width = `${progress}%`;
+        document.getElementById('current-time').textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+      }, 1000);
+    }
+
+    function updatePlayPauseIcon(isPlaying) {
+      const icon = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+      document.getElementById('play-pause').innerHTML = icon;
+    }
+
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    }
+
+    document.getElementById('play-pause').addEventListener('click', () => {
+      if (player && player.playing()) {
+        player.pause();
+        updatePlayPauseIcon(false);
+      } else if (player) {
+        player.play();
+        updatePlayPauseIcon(true);
+      }
+    });
+
+    document.getElementById('next').addEventListener('click', playNext);
+    document.getElementById('prev').addEventListener('click', () => {
+      currentTrackIndex = (currentTrackIndex - 1 + tracks.length) % tracks.length;
+      playTrack(currentTrackIndex);
+    });
+
+    document.getElementById('add-track-btn').addEventListener('click', async () => {
+      const trackUrl = document.getElementById('track-url').value;
+      if (trackUrl) {
+        try {
+          const response = await fetch('http://localhost:8080/add-track', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ track_url: trackUrl }),
+          });
+          if (response.ok) {
+            loadTrackList();
+            const modalElement = document.getElementById('addTrackModal');
+            const modal = bootstrap.Modal.getInstance(modalElement);
+            modal.hide();
+          } else {
+            console.error('Ошибка добавления трека');
+          }
+        } catch (error) {
+          console.error('Ошибка добавления трека:', error);
+        }
+      }
+    });
+
+    loadTrackList();
+  </script>
+</body>
+</html>

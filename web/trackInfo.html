@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Информация о треке</title>
+</head>
+<body>
+  <h1>{{.TrackInfo.Title}}</h1>
+
+  <!-- Получаем имя первого артиста, если он существует -->
+  <p>Автор: {{(index .TrackInfo.Artists 0).Name}}</p>
+
+  <!-- Продолжительность -->
+  <p>Продолжительность: {{.TrackInfo.DurationMs}} мс</p>
+
+  <!-- Обложка -->
+  <img src="http://{{.CoverURI}}400x400" alt="Cover Image" style="max-width: 300px;">
+
+  <!-- Плеер для воспроизведения -->
+  <audio controls>
+    <source src="{{.TrackURL}}" type="audio/mp3">
+    Ваш браузер не поддерживает элемент audio.
+  </audio>
+
+  <br>
+  <a href="/">Вернуться на главную</a>
+</body>
+</html>

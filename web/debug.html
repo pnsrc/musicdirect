@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Отладочная информация - MusicDirect</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eee;
+            color: #2c3e50;
+        }
+        .item {
+            margin: 8px 0;
+            padding-left: 20px;
+        }
+        .label {
+            color: #666;
+            display: inline-block;
+            width: 200px;
+        }
+        .value {
+            font-family: monospace;
+        }
+        .good {
+            color: #27ae60;
+        }
+        .warning {
+            color: #e74c3c;
+        }
+        .memory-bar {
+            background: #ecf0f1;
+            height: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        .memory-used {
+            background: #3498db;
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Отладочная информация</h1>
+
+        <div class="section">
+            <div class="title">Информация о приложении</div>
+            <div class="item"><span class="label">Название:</span> <span class="value">{{.App.Name}}</span></div>
+            <div class="item"><span class="label">Версия:</span> <span class="value">{{.App.Version}}</span></div>
+            <div class="item"><span class="label">Время сборки:</span> <span class="value">{{.App.BuildTime}}</span></div>
+            <div class="item"><span class="label">Commit Hash:</span> <span class="value">{{.App.CommitHash}}</span></div>
+            <div class="item"><span class="label">Время запуска:</span> <span class="value">{{.App.StartTime}}</span></div>
+            <div class="item"><span class="label">Время работы:</span> <span class="value">{{.App.Uptime}}</span></div>
+        </div>
+
+        <div class="section">
+            <div class="title">Системная информация</div>
+            <div class="item"><span class="label">Go версия:</span> <span class="value">{{.GoVersion}}</span></div>
+            <div class="item"><span class="label">ОС:</span> <span class="value">{{.OS}}</span></div>
+            <div class="item"><span class="label">Архитектура:</span> <span class="value">{{.Arch}}</span></div>
+            <div class="item"><span class="label">CPU ядер:</span> <span class="value">{{.NumCPU}}</span></div>
+            <div class="item"><span class="label">Горутин:</span> <span class="value">{{.NumGoroutine}}</span></div>
+            <div class="item"><span class="label">GOPATH:</span> <span class="value">{{.GOPATH}}</span></div>
+            <div class="item"><span class="label">GOROOT:</span> <span class="value">{{.GOROOT}}</span></div>
+        </div>
+
+        <div class="section">
+            <div class="title">База данных</div>
+            <div class="item">
+                <span class="label">Статус:</span>
+                {{if .Database.Connected}}
+                <span class="value good">Подключено</span>
+                <div class="item"><span class="label">Открытые соединения:</span> <span class="value">{{.Database.Stats.OpenConnections}}</span></div>
+                <div class="item"><span class="label">Активные:</span> <span class="value">{{.Database.Stats.InUse}}</span></div>
+                <div class="item"><span class="label">Простаивают:</span> <span class="value">{{.Database.Stats.Idle}}</span></div>
+                {{else}}
+                <span class="value warning">Отключено</span>
+                {{end}}
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="title">Переменные окружения</div>
+            {{range $key, $value := .Environment}}
+            <div class="item"><span class="label">{{$key}}:</span> <span class="value">{{$value}}</span></div>
+            {{end}}
+        </div>
+
+        <div class="section">
+            <div class="title">Время сервера</div>
+            <div class="item"><span class="label">Текущее время:</span> <span class="value">{{.Time.Format "2006-01-02 15:04:05 MST"}}</span></div>
+        </div>
+    </div>
+
+    <script>
+        // Обновление времени
+        setInterval(() => {
+            const timeElements = document.querySelectorAll('.server-time');
+            timeElements.forEach(el => {
+                const date = new Date();
+                el.textContent = date.toLocaleString();
+            });
+        }, 1000);
+    </script>
+</body>
+</html>
