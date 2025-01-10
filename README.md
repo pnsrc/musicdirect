@@ -21,8 +21,28 @@
 ## Установка и запуск
 
 1. Установите Go, если еще не установлен:
+MacOS:
 ```bash
 brew install go
+```
+Windows:
+Скачайте и установите с официального сайта: https://golang.org/dl/ или через [chocolatey](https://chocolatey.org/):
+```bash
+choco install golang
+```
+Debian/Ubuntu:
+```bash
+sudo apt install golang
+```
+
+Fedora:
+```bash
+sudo dnf install golang
+```
+
+Arch:
+```bash
+sudo pacman -S go
 ```
 
 2. Установите зависимости:
