@@ -1,4 +1,4 @@
-module yandex-music-player
+module musicdirect
 
 go 1.23.4
 
