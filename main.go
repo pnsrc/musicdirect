@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
 	"pkg.botr.me/yamusic"
 )
@@ -29,6 +30,25 @@ const (
 
 // Инициализация клиента для Яндекс Музыки
 var client *yamusic.Client
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Для простоты, пропускаем проверки происхождения
+	},
+}
+
+type Message struct {
+	Offer        interface{} `json:"offer,omitempty"`
+	Answer       interface{} `json:"answer,omitempty"`
+	IceCandidate interface{} `json:"iceCandidate,omitempty"`
+}
+
+type Client struct {
+	conn *websocket.Conn
+	send chan Message
+}
+
+var clients = make(map[*Client]bool)
 
 func openDB() (*sql.DB, error) {
 	// Открытие соединения с базой данных
@@ -131,6 +151,52 @@ func loadTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
 	if err != nil {
 		log.Printf("Error executing template: %v", err)
 		http.Error(w, "Template rendering error", http.StatusInternalServerError)
+	}
+}
+
+func handleConnection(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	client := &Client{
+		conn: conn,
+		send: make(chan Message),
+	}
+
+	clients[client] = true
+	defer func() {
+		delete(clients, client)
+		client.conn.Close()
+	}()
+
+	// Прослушивание входящих сообщений от клиента
+	go func() {
+		for {
+			var msg Message
+			err := conn.ReadJSON(&msg)
+			if err != nil {
+				log.Println(err)
+				break
+			}
+			// Отправить сообщение всем подключенным клиентам
+			for c := range clients {
+				if c != client {
+					c.send <- msg
+				}
+			}
+		}
+	}()
+
+	// Отправка сообщений клиенту
+	for msg := range client.send {
+		err := conn.WriteJSON(msg)
+		if err != nil {
+			log.Println(err)
+			break
+		}
 	}
 }
 
@@ -690,9 +756,13 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// иницилизируем webrtc сервер
+
 	fs := http.FileServer(http.Dir(staticDir))
 
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
+
+	http.HandleFunc("/ws", handleConnection)
 
 	// Проверяем, существует ли база данных
 	if !dbExists() {
@@ -709,6 +779,7 @@ func main() {
 		http.HandleFunc("/add-track", addTrackToPlaylistHandler)
 		http.HandleFunc("/api/tracks", apiTracksHandler)
 		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
+
 	}
 
 	log.Printf("Starting server on :%d", port)

@@ -3,6 +3,18 @@ let currentTrackIndex = 0;
 let player = null;
 let progressInterval;
 let currentSortKey = 'position'; // Default sort by position
+let localPeer, remotePeer, localStream, remoteStream;
+let socket = new WebSocket('ws://localhost:8080/ws'); // Ваш WebSocket сервер
+
+// WebRTC: Получение аудио
+navigator.mediaDevices.getUserMedia({ audio: true })
+  .then((stream) => {
+    localStream = stream;
+    document.getElementById('remoteAudio').srcObject = stream; // Для локального теста
+  })
+  .catch((err) => {
+    console.error("Error accessing audio: ", err);
+  });
 
 async function loadTrackList() {
   try {
@@ -10,13 +22,13 @@ async function loadTrackList() {
     if (!response.ok) throw new Error('Ошибка сети');
     tracks = await response.json();
 
-    // Sort tracks based on current sort key
+    // Сортировка треков
     sortTracks();
 
     const trackListContainer = document.getElementById('track-list');
     trackListContainer.innerHTML = '';
 
-    // Add sort controls
+    // Добавление элементов управления сортировкой
     const sortControls = document.createElement('div');
     sortControls.className = 'sort-controls mb-3';
     sortControls.innerHTML = `
@@ -33,7 +45,7 @@ async function loadTrackList() {
     `;
     trackListContainer.appendChild(sortControls);
 
-    // Add tracks
+    // Добавление треков в список
     tracks.forEach((track, index) => {
       const trackItem = document.createElement('div');
       trackItem.className = 'track';
@@ -87,11 +99,36 @@ function playTrack(index) {
   document.getElementById('current-track-artist').textContent = track.artist;
   document.getElementById('cover-img').src = `https://${track.cover_uri}600x600`;
 
-  // Change accent color
+  // Изменение акцентного цвета
   const hue = Math.floor(Math.random() * 360);
   document.documentElement.style.setProperty('--accent-color', `hsl(${hue}, 84%, 60%)`);
 
   updatePlayPauseIcon(true);
+
+  if (localStream) {
+    if (!localPeer) {
+      localPeer = new SimplePeer({
+        initiator: true,
+        trickle: false,
+        stream: localStream
+      });
+
+      localPeer.on('signal', (data) => {
+        console.log('Sending offer: ', data);
+        socket.send(JSON.stringify({ offer: data }));
+      });
+
+      localPeer.on('stream', (stream) => {
+        console.log('Received remote stream');
+        remoteStream = stream;
+        document.getElementById('remoteAudio').srcObject = remoteStream;
+      });
+
+      localPeer.on('iceCandidate', (candidate) => {
+        socket.send(JSON.stringify({ iceCandidate: candidate }));
+      });
+    }
+  }
 }
 
 function playNext() {
@@ -122,59 +159,62 @@ function formatTime(seconds) {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
-document.getElementById('play-pause').addEventListener('click', () => {
-  if (player && player.playing()) {
-    player.pause();
-    updatePlayPauseIcon(false);
-  } else if (player) {
-    player.play();
-    updatePlayPauseIcon(true);
+socket.onopen = () => {
+  console.log('WebSocket connected');
+};
+
+socket.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+
+  if (message.offer) {
+    handleOffer(message.offer);
+  } else if (message.answer) {
+    handleAnswer(message.answer);
+  } else if (message.iceCandidate) {
+    handleIceCandidate(message.iceCandidate);
   }
-});
+};
 
-document.getElementById('next').addEventListener('click', playNext);
-document.getElementById('prev').addEventListener('click', () => {
-  currentTrackIndex = (currentTrackIndex - 1 + tracks.length) % tracks.length;
-  playTrack(currentTrackIndex);
-});
+function handleOffer(offer) {
+  if (!remotePeer) {
+    remotePeer = new SimplePeer({
+      initiator: false,
+      trickle: false,
+      stream: localStream
+    });
 
-document.getElementById('progress-bar').addEventListener('click', (event) => {
-  const bar = event.currentTarget;
-  const rect = bar.getBoundingClientRect();
-  const offsetX = event.clientX - rect.left;
-  const width = rect.width;
-  const percent = offsetX / width;
-  const duration = player.duration();
-  player.seek(duration * percent);
-});
+    remotePeer.on('signal', (data) => {
+      console.log('Sending answer: ', data);
+      socket.send(JSON.stringify({ answer: data }));
+    });
 
-document.addEventListener('keydown', (event) => {
-  if (event.code === 'Space') {
-    if (player && player.playing()) {
-      player.pause();
-      updatePlayPauseIcon(false);
-    } else if (player) {
-      player.play();
-      updatePlayPauseIcon(true);
-    }
+    remotePeer.on('stream', (stream) => {
+      console.log('Received remote stream');
+      remoteStream = stream;
+      document.getElementById('remoteAudio').srcObject = remoteStream;
+    });
+
+    remotePeer.on('iceCandidate', (candidate) => {
+      socket.send(JSON.stringify({ iceCandidate: candidate }));
+    });
   }
-});
+  remotePeer.signal(offer);
+}
 
-navigator.mediaSession.setActionHandler('play', () => {
-  if (player) {
-    player.play();
-    updatePlayPauseIcon(true);
+function handleAnswer(answer) {
+  if (localPeer) {
+    localPeer.signal(answer);
   }
-});
+}
 
-navigator.mediaSession.setActionHandler('pause', () => {
-  if (player) {
-    player.pause();
-    updatePlayPauseIcon(false);
+function handleIceCandidate(candidate) {
+  if (localPeer) {
+    localPeer.addIceCandidate(candidate);
   }
-});
-
-navigator.mediaSession.setActionHandler('nexttrack', playNext);
+  if (remotePeer) {
+    remotePeer.addIceCandidate(candidate);
+  }
+}
 
 function updateMediaSession(track) {
   navigator.mediaSession.metadata = new MediaMetadata({
