@@ -20,9 +20,11 @@ import (
 )
 
 const (
-	port    = 8080
-	dbPath  = "settings.db"
-	tmplDir = "web" // Папка с шаблонами
+	port      = 8080
+	dbPath    = "settings.db"
+	tmplDir   = "web"    // Папка с шаблонами
+	staticDir = "static" // Папка со статическими файлами
+
 )
 
 // Инициализация клиента для Яндекс Музыки
@@ -45,22 +47,42 @@ func createTableIfNotExists() error {
 	}
 	defer db.Close()
 
-	// SQL-запрос для создания таблицы, если она не существует
-	createTableQuery := `
-	CREATE TABLE IF NOT EXISTS playlist (
-		track_id INTEGER PRIMARY KEY
-	);
-	CREATE TABLE IF NOT EXISTS settings (
-		id INTEGER PRIMARY KEY,
-		user_id INTEGER NOT NULL,
-		access_token TEXT NOT NULL
-	);
-	`
+	// Создание таблицы playlist
+	createPlaylistQuery := `
+    CREATE TABLE IF NOT EXISTS playlist (
+        track_id INTEGER PRIMARY KEY,
+        date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        position INTEGER DEFAULT 0
+    );`
 
-	// Выполняем запрос
-	_, err = db.Exec(createTableQuery)
+	// Создание таблицы settings
+	createSettingsQuery := `
+    CREATE TABLE IF NOT EXISTS settings (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        access_token TEXT NOT NULL
+    );`
+
+	// Начинаем транзакцию
+	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to create table: %w", err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	// Выполняем создание таблиц
+	if _, err := tx.Exec(createPlaylistQuery); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to create playlist table: %w", err)
+	}
+
+	if _, err := tx.Exec(createSettingsQuery); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to create settings table: %w", err)
+	}
+
+	// Подтверждаем транзакцию
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
@@ -207,19 +229,27 @@ func setupHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		defer db.Close()
 
-		// Создаем таблицы и сохраняем данные
+		// Создаем таблицу playlist
 		_, err = db.Exec(`
-			CREATE TABLE IF NOT EXISTS playlist (
-				track_id INTEGER PRIMARY KEY
-			);
-			CREATE TABLE IF NOT EXISTS settings (
-				id INTEGER PRIMARY KEY,
-				user_id INTEGER NOT NULL,
-				access_token TEXT NOT NULL
-			);
-		`)
+            CREATE TABLE IF NOT EXISTS playlist (
+                track_id INTEGER PRIMARY KEY,
+                date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                position INTEGER DEFAULT 0
+            );`)
 		if err != nil {
-			http.Error(w, "Error creating tables", http.StatusInternalServerError)
+			http.Error(w, "Error creating playlist table", http.StatusInternalServerError)
+			return
+		}
+
+		// Создаем таблицу settings
+		_, err = db.Exec(`
+            CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                access_token TEXT NOT NULL
+            );`)
+		if err != nil {
+			http.Error(w, "Error creating settings table", http.StatusInternalServerError)
 			return
 		}
 
@@ -245,18 +275,16 @@ func dbExists() bool {
 
 // Обработчик для API /api/tracks
 func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
-	// Устанавливаем Content-Type на application/json
 	w.Header().Set("Content-Type", "application/json")
 
-	// Получаем все треки из базы данных
 	db, err := openDB()
 	if err != nil {
 		log.Fatal("Failed to open database:", err)
 	}
 	defer db.Close()
 
-	// Запрашиваем все треки по их track_id
-	rows, err := db.Query("SELECT track_id FROM playlist")
+	// Изменяем запрос для получения track_id и position
+	rows, err := db.Query("SELECT track_id, position FROM playlist ORDER BY position")
 	if err != nil {
 		log.Printf("Error fetching playlist: %v", err)
 		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
@@ -270,66 +298,63 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 		Artist   string `json:"artist"`
 		TrackURL string `json:"track_url"`
 		CoverURI string `json:"cover_uri"`
+		Position int    `json:"position"`
 	}
 
-	// Проходим по каждому треку
 	for rows.Next() {
 		var track struct {
-			TrackID int
+			TrackID  int
+			Position int
 		}
-		if err := rows.Scan(&track.TrackID); err != nil {
+		// Сканируем оба поля
+		if err := rows.Scan(&track.TrackID, &track.Position); err != nil {
 			log.Printf("Error scanning row: %v", err)
 			http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
 			return
 		}
 
-		// Получаем информацию о треке с API Яндекс Музыки
 		trackInfo, resp, err := client.Tracks().Get(r.Context(), track.TrackID)
 		if err != nil || resp.StatusCode != http.StatusOK {
 			log.Printf("Error getting track info: %v", err)
-			continue // Если не удалось получить информацию, пропускаем этот трек
+			continue
 		}
 
-		// Извлекаем название и артиста из ответа Яндекс Музыки
 		title := trackInfo.Result[0].Title
 		artist := trackInfo.Result[0].Artists[0].Name
 
-		// Получаем URL для скачивания
 		trackURL, err := client.Tracks().GetDownloadURL(r.Context(), track.TrackID)
 		if err != nil {
 			log.Printf("Error getting track download URL: %v", err)
 			continue
 		}
 
-		// Исправляем URL для обложки
 		coverURI := trackInfo.Result[0].Albums[0].CoverURI
 		coverURI = strings.Replace(coverURI, "%25%25", "400x400", -1)
 		coverURI = strings.Replace(coverURI, "%", "", -1)
 
-		// Добавляем всю информацию в список
 		tracks = append(tracks, struct {
 			TrackID  int    `json:"track_id"`
 			Title    string `json:"title"`
 			Artist   string `json:"artist"`
 			TrackURL string `json:"track_url"`
 			CoverURI string `json:"cover_uri"`
+			Position int    `json:"position"`
 		}{
 			TrackID:  track.TrackID,
-			Title:    title,  // Используем название трека с Яндекс Музыки
-			Artist:   artist, // Используем информацию об артисте с Яндекс Музыки
+			Title:    title,
+			Artist:   artist,
 			TrackURL: trackURL,
 			CoverURI: coverURI,
+			Position: track.Position, // Теперь position будет корректно передаваться
 		})
 	}
 
-	// Если возникла ошибка при обходе строк
 	if err := rows.Err(); err != nil {
 		log.Printf("Error iterating rows: %v", err)
 		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
 		return
 	}
 
-	// Преобразуем список треков в JSON
 	err = json.NewEncoder(w).Encode(tracks)
 	if err != nil {
 		log.Printf("Error encoding tracks to JSON: %v", err)
@@ -398,6 +423,44 @@ func addTrackToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		// Если не POST-запрос, показываем ошибку
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 	}
+}
+
+// Функция для изменения позиции трека в плейлисте
+func changeTrackPosition(w http.ResponseWriter, r *http.Request) {
+	// Проверяем, что метод запроса - POST
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+	// Чтение данных из тела запроса
+	var requestData struct {
+		TrackID  int `json:"track_id"`
+		Position int `json:"position"`
+	}
+	// Декодируем JSON в структуру
+	err := json.NewDecoder(r.Body).Decode(&requestData)
+	if err != nil {
+		log.Printf("Error decoding JSON: %v", err)
+		http.Error(w, "Invalid request data", http.StatusBadRequest)
+		return
+	}
+	// Открываем базу данных для изменения позиции трека
+	db, err := openDB()
+	if err != nil {
+		log.Printf("Failed to open database: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+	// Обновляем позицию трека в плейлисте
+	_, err = db.Exec("UPDATE playlist SET position = ? WHERE track_id = ?", requestData.Position, requestData.TrackID)
+	if err != nil {
+		log.Printf("Error updating track position: %v", err)
+		http.Error(w, "Error updating track position", http.StatusInternalServerError)
+		return
+	}
+	// Отправляем ответ об успешном изменении позиции
+	w.WriteHeader(http.StatusOK)
 }
 
 // Функция для извлечения track_id из URL
@@ -627,6 +690,10 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	fs := http.FileServer(http.Dir(staticDir))
+
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
+
 	// Проверяем, существует ли база данных
 	if !dbExists() {
 		http.HandleFunc("/setup", setupHandler)
@@ -641,6 +708,7 @@ func main() {
 		http.HandleFunc("/playlist", playlistHandler)
 		http.HandleFunc("/add-track", addTrackToPlaylistHandler)
 		http.HandleFunc("/api/tracks", apiTracksHandler)
+		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
 	}
 
 	log.Printf("Starting server on :%d", port)
