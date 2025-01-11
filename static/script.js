@@ -21,7 +21,7 @@ async function loadTrackList() {
     sortControls.className = 'sort-controls mb-3';
     sortControls.innerHTML = `
       <div class="btn-group">
-        <button class="btn btn-sm ${currentSortKey === 'position' ? 'btn-primary' : 'btn-outline-primary'}" 
+        <button class="btn btn-sm ${currentSortKey === 'position' ? 'btn-primary' : 'btn-outline-primary'}"
                 onclick="changeSortKey('position')">
           По позиции
         </button>
@@ -44,6 +44,12 @@ async function loadTrackList() {
           <div class="track-title">${track.title}</div>
           <div class="track-artist">${track.artist}</div>
         </div>
+        <div class="track-controls">
+          <button class="btn btn-sm btn-danger" onclick="deleteTrack(${track.track_id})">
+            <i class="fas fa-trash"></i>
+          </button>
+         </div>
+
       `;
       trackItem.addEventListener('click', () => playTrack(index));
       trackListContainer.appendChild(trackItem);
@@ -68,6 +74,113 @@ function changeSortKey(newSortKey) {
   currentSortKey = newSortKey;
   loadTrackList();
 }
+
+// Функция для удаления трека
+function deleteTrack(trackId) {
+  // Подтверждение удаления
+  if (!confirm('Вы уверены, что хотите удалить этот трек?')) {
+      return;
+  }
+
+  // Отправка запроса на удаление
+  fetch('/api/tracks/delete', {
+      method: 'POST',
+      headers: {
+          'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+          track_id: trackId
+      })
+  })
+  .then(response => {
+      if (!response.ok) {
+          throw new Error('Network response was not ok');
+      }
+      return response.json();
+  })
+  .then(data => {
+      // Если удаление прошло успешно, удаляем элемент из DOM
+      const trackElement = document.querySelector(`[data-track-id="${trackId}"]`);
+      if (trackElement) {
+          trackElement.remove();
+      }
+      // Показываем уведомление об успешном удалении
+      showNotification('Трек успешно удален');
+      // Обновляем плейлист
+      updatePlaylist();
+  })
+  .catch(error => {
+      console.error('Error:', error);
+      showNotification('Ошибка при удалении трека', 'error');
+  });
+}
+
+// Вспомогательная функция для показа уведомлений
+function showNotification(message, type = 'success') {
+  const notification = document.createElement('div');
+  notification.className = `notification ${type}`;
+  notification.textContent = message;
+  
+  document.body.appendChild(notification);
+  
+  // Удаляем уведомление через 3 секунды
+  setTimeout(() => {
+      notification.remove();
+  }, 3000);
+}
+
+// Функция обновления плейлиста
+function updatePlaylist() {
+  fetch('/api/tracks')
+      .then(response => response.json())
+      .then(tracks => {
+          const playlist = document.querySelector('.playlist');
+          if (playlist) {
+              renderTracks(tracks);
+          }
+      })
+      .catch(error => {
+          console.error('Error updating playlist:', error);
+      });
+}
+
+// CSS для уведомлений
+const style = document.createElement('style');
+style.textContent = `
+  .notification {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 15px 25px;
+      border-radius: 4px;
+      color: white;
+      font-weight: bold;
+      z-index: 1000;
+      animation: fadeIn 0.3s, fadeOut 0.3s 2.7s;
+  }
+  
+  .notification.success {
+      background-color: #4CAF50;
+  }
+  
+  .notification.error {
+      background-color: #f44336;
+  }
+  
+  @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+  }
+  
+  @keyframes fadeOut {
+      from { opacity: 1; transform: translateY(0); }
+      to { opacity: 0; transform: translateY(-20px); }
+  }
+`;
+document.head.appendChild(style);
+
+
+
 
 function playTrack(index) {
   if (player) player.stop();

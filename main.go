@@ -689,6 +689,68 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Устанавливаем заголовок для JSON ответа
+	w.Header().Set("Content-Type", "application/json")
+
+	// Декодируем данные запроса
+	var requestData struct {
+		TrackID int `json:"track_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
+		log.Printf("Error decoding request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Открываем базу данных
+	db, err := openDB()
+	if err != nil {
+		log.Printf("Failed to open database: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+
+	// Удаляем трек
+	result, err := db.Exec("DELETE FROM playlist WHERE track_id = ?", requestData.TrackID)
+	if err != nil {
+		log.Printf("Error deleting track from playlist: %v", err)
+		http.Error(w, "Error deleting track from playlist", http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем, был ли удален трек
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		log.Printf("Error checking rows affected: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Формируем ответ
+	response := struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}{
+		Success: rowsAffected > 0,
+		Message: "Track successfully deleted",
+	}
+
+	// Отправляем JSON ответ
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding response: %v", err)
+		http.Error(w, "Error encoding response", http.StatusInternalServerError)
+		return
+	}
+}
+
 func main() {
 	fs := http.FileServer(http.Dir(staticDir))
 
@@ -709,6 +771,7 @@ func main() {
 		http.HandleFunc("/add-track", addTrackToPlaylistHandler)
 		http.HandleFunc("/api/tracks", apiTracksHandler)
 		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
+		http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
 	}
 
 	log.Printf("Starting server on :%d", port)
