@@ -6,7 +6,7 @@ let currentSortKey = 'position'; // Default sort by position
 
 async function loadTrackList() {
   try {
-    const response = await fetch('http://localhost:8080/api/tracks');
+    const response = await fetch('/api/tracks');
     if (!response.ok) throw new Error('Ошибка сети');
     tracks = await response.json();
 
@@ -302,7 +302,7 @@ document.getElementById('add-track-btn').addEventListener('click', async () => {
   const trackUrl = document.getElementById('track-url').value;
   if (trackUrl) {
     try {
-      const response = await fetch('http://localhost:8080/add-track', {
+      const response = await fetch('/add-track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ track_url: trackUrl }),
