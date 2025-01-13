@@ -2,7 +2,33 @@ let tracks = [];
 let currentTrackIndex = 0;
 let player = null;
 let progressInterval;
-let currentSortKey = 'position'; // Default sort by position
+let currentSortKey = 'position';
+let previousTrackIds = [];
+
+async function checkForPlaylistUpdates() {
+  try {
+    const response = await fetch('/api/tracks/all');
+    if (!response.ok) throw new Error('Ошибка сети');
+
+    const currentTrackIds = await response.json();
+
+    // Сравниваем с предыдущими треками
+    if (!arraysAreEqual(currentTrackIds, previousTrackIds)) {
+      console.log('Обнаружены изменения в плейлисте, обновляем...');
+      previousTrackIds = [...currentTrackIds]; // Создаём копию массива
+      await loadTrackList(); // Обновляем отображение плейлиста
+    }
+  } catch (error) {
+    console.error('Ошибка проверки обновлений плейлиста:', error);
+  }
+}
+
+// Вспомогательная функция для сравнения массивов
+function arraysAreEqual(arr1, arr2) {
+  if (arr1.length !== arr2.length) return false;
+  return arr1.every((value, index) => value === arr2[index]);
+}
+
 
 async function loadTrackList() {
   try {
@@ -322,3 +348,5 @@ document.getElementById('add-track-btn').addEventListener('click', async () => {
 });
 
 loadTrackList();
+// Проверка обновлений плейлиста каждые 5 секунд
+setInterval(checkForPlaylistUpdates, 5000);

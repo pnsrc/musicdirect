@@ -751,6 +751,54 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Выводим все track_id из базы данных
+func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
+	// Открываем базу данных
+	db, err := openDB()
+	if err != nil {
+		log.Fatal("Failed to open database:", err)
+	}
+	defer db.Close()
+
+	// Запрашиваем все track_id
+	rows, err := db.Query("SELECT track_id FROM playlist")
+	if err != nil {
+		log.Printf("Error fetching playlist: %v", err)
+		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	// Список track_id
+	var trackIDs []int
+
+	// Проходим по каждому track_id
+	for rows.Next() {
+		var trackID int
+		if err := rows.Scan(&trackID); err != nil {
+			log.Printf("Error scanning row: %v", err)
+			http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
+			return
+		}
+
+		// Добавляем track_id в список
+		trackIDs = append(trackIDs, trackID)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Error iterating rows: %v", err)
+		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
+		return
+	}
+
+	// Отправляем список track_id в формате JSON
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(trackIDs); err != nil {
+		log.Printf("Error encoding track IDs: %v", err)
+		http.Error(w, "Error encoding track IDs", http.StatusInternalServerError)
+	}
+}
+
 func main() {
 	fs := http.FileServer(http.Dir(staticDir))
 
@@ -772,6 +820,8 @@ func main() {
 		http.HandleFunc("/api/tracks", apiTracksHandler)
 		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
 		http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
+		http.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
+
 	}
 
 	log.Printf("Starting server on :%d", port)
