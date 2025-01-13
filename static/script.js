@@ -350,3 +350,57 @@ document.getElementById('add-track-btn').addEventListener('click', async () => {
 loadTrackList();
 // Проверка обновлений плейлиста каждые 5 секунд
 setInterval(checkForPlaylistUpdates, 5000);
+
+const socket = new WebSocket(`ws://${window.location.host}/ws`);
+
+socket.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  if (message.type === 'notification') {
+    showNotification(message.message);
+  }
+};
+
+function showNotification(message) {
+  const notification = document.createElement('div');
+  notification.className = 'notification success';
+  notification.textContent = message;
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.remove();
+  }, 3000);
+}
+
+// обрабатываем {"type":"next"} {"type":"pause"} {"type":"now"} {"type":"prev"} и тп от ws switch case
+
+socket.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  switch (message.type) {
+    case 'next':
+      playNext();
+      break;
+    case 'pause':
+    // она как и проиграть так и пауза
+      if (player && player.playing()) {
+        player.pause();
+        updatePlayPauseIcon(false);
+      } else if (player) {
+        player.play();
+        updatePlayPauseIcon(true);
+      }
+      break;
+    case 'now':
+      // отпраляем текущий трек на сервер
+      showNotification('Короче както лень');
+      break;
+    case 'prev':
+      currentTrackIndex = (currentTrackIndex - 1 + tracks.length) % tracks.length;
+      playTrack(currentTrackIndex);
+      break;
+  }
+}
+
+// если ws не доступен то показываем уведомление Ебать, сервак наебнулся поднимай
+socket.onclose = () => {
+  showNotification('Ебать, сервак наебнулся поднимай');
+}

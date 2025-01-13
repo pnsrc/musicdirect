@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,8 +14,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/gorilla/websocket"
+	_ "github.com/gorilla/websocket"
 	_ "github.com/mattn/go-sqlite3"
 	"pkg.botr.me/yamusic"
 )
@@ -22,16 +27,23 @@ import (
 const (
 	port      = 8080
 	dbPath    = "settings.db"
-	tmplDir   = "web"    // Папка с шаблонами
-	staticDir = "static" // Папка со статическими файлами
-
+	tmplDir   = "web"
+	staticDir = "static"
 )
 
-// Инициализация клиента для Яндекс Музыки
-var client *yamusic.Client
+type Config struct {
+	TelegramToken string
+	Database      *sql.DB
+	YaMusicClient *yamusic.Client
+}
+
+var (
+	client *yamusic.Client
+	db     *sql.DB
+	wg     sync.WaitGroup
+)
 
 func openDB() (*sql.DB, error) {
-	// Открытие соединения с базой данных
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -88,37 +100,164 @@ func createTableIfNotExists() error {
 	return nil
 }
 
-func init() {
-	// Создание таблиц, если они не существуют
-	err := createTableIfNotExists()
+func runTelegramBot(cfg *Config) {
+	defer wg.Done()
+
+	bot, err := tgbotapi.NewBotAPI(cfg.TelegramToken)
 	if err != nil {
-		log.Fatalf("Error creating table: %v", err)
+		log.Printf("Failed to start Telegram bot: %v", err)
+		return
 	}
 
-	// Открываем соединение с базой данных SQLite
-	db, err := openDB()
-	if err != nil {
-		log.Fatal("Failed to open database:", err)
+	log.Printf("Authorized on account %s", bot.Self.UserName)
+
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+
+	updates := bot.GetUpdatesChan(u)
+
+	for update := range updates {
+		if update.Message == nil {
+			continue
+		}
+
+		switch {
+		case update.Message.IsCommand():
+			handleCommand(bot, update.Message, cfg)
+		case strings.Contains(update.Message.Text, "music.yandex"):
+			handleTrackURL(bot, update.Message, cfg)
+		}
 	}
-	defer db.Close()
-
-	// Получаем данные из базы данных
-	var userID int
-	var accessToken string
-
-	row := db.QueryRow("SELECT user_id, access_token FROM settings WHERE id = 2")
-	err = row.Scan(&userID, &accessToken)
-
-	// Инициализируем клиента с данными из базы данных
-	client = yamusic.NewClient(yamusic.AccessToken(userID, accessToken))
 }
 
-// Функция для загрузки шаблона из файла
+func handleCommand(bot *tgbotapi.BotAPI, message *tgbotapi.Message, cfg *Config) {
+	var reply string
+
+	switch message.Command() {
+	case "start":
+		reply = "Привет! Я бот для управления вашим плейлистом. Доступные команды:\n" +
+			"/playlist - показать текущий плейлист\n" +
+			"/help - показать справку\n" +
+			"Также вы можете отправить мне ссылку на трек Яндекс.Музыки для добавления"
+
+	case "help":
+		reply = "Доступные команды:\n" +
+			"/playlist - показать текущий плейлист\n" +
+			"/help - показать эту справку\n\n" +
+			"/next - переключиться на следующий трек\n" +
+			"/prev - переключиться на предыдущий трек\n" +
+			"/now - показать текущий трек\n" +
+			"/pause - поставить текущий трек на паузу\n\n" +
+			"Для добавления трека отправьте ссылку на него с Яндекс.Музыки\n" +
+			"Для удаления трека используйте кнопку удаления в списке плейлиста"
+
+	case "next":
+		// отправляем wsBroadcast сообщение
+		wsBroadcast <- map[string]string{
+			"type": "next",
+		}
+		reply = "Переключение на следующий трек"
+
+	case "now":
+		// отправляем wsBroadcast сообщение
+		wsBroadcast <- map[string]string{
+			"type": "now",
+		}
+		reply = "Показать текущий трек"
+
+	case "prev":
+		// отправляем wsBroadcast сообщение
+		wsBroadcast <- map[string]string{
+			"type": "prev",
+		}
+		reply = "Переключение на предыдущий трек"
+
+	case "pause":
+		// отправляем wsBroadcast сообщение
+		wsBroadcast <- map[string]string{
+			"type": "pause",
+		}
+		reply = "Пауза"
+
+	case "playlist":
+		tracks, err := getPlaylist(context.Background(), cfg)
+		if err != nil {
+			reply = "Ошибка при получении плейлиста: " + err.Error()
+		} else if len(tracks) == 0 {
+			reply = "Плейлист пуст"
+		} else {
+			var sb strings.Builder
+			sb.WriteString("Ваш плейлист:\n\n")
+			for i, track := range tracks {
+				sb.WriteString(fmt.Sprintf("%d. %s - %s\n", i+1, track.Artist, track.Title))
+			}
+			reply = sb.String()
+		}
+
+	case "notify":
+		wsBroadcast <- map[string]string{
+			"type":    "notification",
+			"message": "Новая команда от Telegram-бота: " + message.Text,
+		}
+		reply = "Уведомление отправлено на фронтенд"
+
+	default:
+		reply = "Неизвестная команда. Используйте /help для просмотра доступных команд"
+	}
+
+	msg := tgbotapi.NewMessage(message.Chat.ID, reply)
+	bot.Send(msg)
+}
+
+type Track struct {
+	TrackID int
+	Title   string
+	Artist  string
+}
+
+func getPlaylist(ctx context.Context, cfg *Config) ([]Track, error) {
+	rows, err := cfg.Database.QueryContext(ctx, "SELECT track_id FROM playlist ORDER BY position")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tracks []Track
+	for rows.Next() {
+		var trackID int
+		if err := rows.Scan(&trackID); err != nil {
+			return nil, err
+		}
+
+		trackInfo, resp, err := cfg.YaMusicClient.Tracks().Get(ctx, trackID)
+		if err != nil || resp.StatusCode != 200 {
+			continue
+		}
+
+		tracks = append(tracks, Track{
+			TrackID: trackID,
+			Title:   trackInfo.Result[0].Title,
+			Artist:  trackInfo.Result[0].Artists[0].Name,
+		})
+	}
+
+	return tracks, rows.Err()
+}
+
+func checkTrackExists(trackID int, db *sql.DB) (bool, error) {
+	var exists bool
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM playlist WHERE track_id = ?)", trackID).Scan(&exists)
+	return exists, err
+}
+
+func addTrackToPlaylist(trackID int, db *sql.DB) error {
+	_, err := db.Exec("INSERT INTO playlist (track_id) VALUES (?)", trackID)
+	return err
+}
+
 func loadTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
-	// Путь к файлу шаблона
 	tmplPath := filepath.Join(tmplDir, tmpl)
 
-	// Чтение шаблона
 	t, err := template.ParseFiles(tmplPath)
 	if err != nil {
 		log.Printf("Error parsing template: %v", err)
@@ -126,7 +265,6 @@ func loadTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
 		return
 	}
 
-	// Отображаем шаблон
 	err = t.Execute(w, data)
 	if err != nil {
 		log.Printf("Error executing template: %v", err)
@@ -134,7 +272,6 @@ func loadTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
 	}
 }
 
-// Страница плейлиста
 func playlistHandler(w http.ResponseWriter, r *http.Request) {
 	// Получаем все треки из базы данных
 	db, err := openDB()
@@ -217,19 +354,16 @@ func playlistHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func setupHandler(w http.ResponseWriter, r *http.Request) {
-	// Если форма отправлена
 	if r.Method == http.MethodPost {
 		token := r.FormValue("token")
 		userID := r.FormValue("userID")
 
-		// Создаем базу данных и сохраняем данные
 		db, err := openDB()
 		if err != nil {
 			log.Fatal("Failed to open database:", err)
 		}
 		defer db.Close()
 
-		// Создаем таблицу playlist
 		_, err = db.Exec(`
             CREATE TABLE IF NOT EXISTS playlist (
                 track_id INTEGER PRIMARY KEY,
@@ -241,7 +375,6 @@ func setupHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Создаем таблицу settings
 		_, err = db.Exec(`
             CREATE TABLE IF NOT EXISTS settings (
                 id INTEGER PRIMARY KEY,
@@ -253,19 +386,16 @@ func setupHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Сохраняем данные
 		_, err = db.Exec("INSERT INTO settings (user_id, access_token) VALUES (?, ?)", userID, token)
 		if err != nil {
 			http.Error(w, "Error saving settings", http.StatusInternalServerError)
 			return
 		}
 
-		// Перенаправляем на главную страницу
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
 
-	// Показываем форму для ввода данных
 	loadTemplate(w, "setup.html", nil)
 }
 func dbExists() bool {
@@ -464,22 +594,82 @@ func changeTrackPosition(w http.ResponseWriter, r *http.Request) {
 }
 
 // Функция для извлечения track_id из URL
-func extractTrackID(trackURL string) (int, error) {
-	// Регулярное выражение для извлечения track_id
-	re := regexp.MustCompile(`/track/(\d+)`)
-	matches := re.FindStringSubmatch(trackURL)
-	if len(matches) < 2 {
-		return 0, fmt.Errorf("track ID not found in URL")
+func extractTrackID(input string) (int, error) {
+	// Сначала проверяем, не является ли input просто числом
+	if trackID, err := strconv.Atoi(strings.TrimSpace(input)); err == nil {
+		return trackID, nil
 	}
 
-	// Преобразуем найденный ID в целое число
-	var trackID int
-	_, err := fmt.Sscanf(matches[1], "%d", &trackID)
+	// Если не число, ищем ID в URL
+	re := regexp.MustCompile(`/track/(\d+)$|/album/\d+/track/(\d+)`)
+	matches := re.FindStringSubmatch(input)
+
+	if len(matches) < 2 {
+		return 0, fmt.Errorf("track ID not found in input: %s", input)
+	}
+
+	// Ищем непустую группу (первая или вторая)
+	var trackIDStr string
+	if matches[1] != "" {
+		trackIDStr = matches[1]
+	} else if matches[2] != "" {
+		trackIDStr = matches[2]
+	}
+
+	// Преобразуем ID в число
+	trackID, err := strconv.Atoi(trackIDStr)
 	if err != nil {
 		return 0, fmt.Errorf("invalid track ID format")
 	}
 
 	return trackID, nil
+}
+
+// Обновляем handleTrackURL для корректной обработки
+func handleTrackURL(bot *tgbotapi.BotAPI, message *tgbotapi.Message, cfg *Config) {
+	// Пытаемся извлечь ID из сообщения
+	trackID, err := extractTrackID(message.Text)
+	if err != nil {
+		msg := tgbotapi.NewMessage(message.Chat.ID,
+			"Неверный формат. Отправьте ссылку на трек или его ID")
+		bot.Send(msg)
+		return
+	}
+
+	// Проверяем существование трека
+	exists, err := checkTrackExists(trackID, cfg.Database)
+	if err != nil {
+		msg := tgbotapi.NewMessage(message.Chat.ID, "Ошибка при проверке трека")
+		bot.Send(msg)
+		return
+	}
+	if exists {
+		msg := tgbotapi.NewMessage(message.Chat.ID, "Этот трек уже есть в плейлисте")
+		bot.Send(msg)
+		return
+	}
+
+	// Получаем информацию о треке
+	trackInfo, resp, err := cfg.YaMusicClient.Tracks().Get(context.Background(), trackID)
+	if err != nil || resp.StatusCode != 200 {
+		msg := tgbotapi.NewMessage(message.Chat.ID, "Ошибка при получении информации о треке")
+		bot.Send(msg)
+		return
+	}
+
+	// Добавляем трек в базу
+	err = addTrackToPlaylist(trackID, cfg.Database)
+	if err != nil {
+		msg := tgbotapi.NewMessage(message.Chat.ID, "Ошибка при добавлении трека")
+		bot.Send(msg)
+		return
+	}
+
+	reply := fmt.Sprintf("Трек добавлен в плейлист:\n%s - %s",
+		trackInfo.Result[0].Artists[0].Name,
+		trackInfo.Result[0].Title)
+	msg := tgbotapi.NewMessage(message.Chat.ID, reply)
+	bot.Send(msg)
 }
 
 // Главная страница
@@ -799,17 +989,80 @@ func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
-	fs := http.FileServer(http.Dir(staticDir))
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Настройте политику CORS, если необходимо
+	},
+}
 
+var wsClients = make(map[*websocket.Conn]bool) // Хранение активных соединений
+var wsBroadcast = make(chan interface{})       // Канал для отправки сообщений клиентам
+
+func wsHandler(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+	wsClients[conn] = true
+
+	for {
+		var msg interface{}
+		if err := conn.ReadJSON(&msg); err != nil {
+			log.Printf("WebSocket read error: %v", err)
+			delete(wsClients, conn)
+			break
+		}
+	}
+}
+
+func wsBroadcastMessages() {
+	for {
+		msg := <-wsBroadcast
+		for client := range wsClients {
+			err := client.WriteJSON(msg)
+			if err != nil {
+				log.Printf("WebSocket write error: %v", err)
+				client.Close()
+				delete(wsClients, client)
+			}
+		}
+	}
+}
+
+func main() {
+	// Initialize database connection
+	var err error
+	db, err = openDB()
+	if err != nil {
+		log.Fatal("Failed to initialize database:", err)
+	}
+	defer db.Close() // Close database when main exits
+
+	fs := http.FileServer(http.Dir(staticDir))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	// Проверяем, существует ли база данных
+	http.HandleFunc("/ws", wsHandler)
+	go wsBroadcastMessages()
+
+	cfg := &Config{
+		TelegramToken: "YOUR_TELEGRAM",
+		Database:      db,
+		YaMusicClient: client,
+	}
+
+	if cfg.TelegramToken == "" {
+		log.Println("Warning: TELEGRAM_BOT_TOKEN not set, Telegram bot will not be started")
+	} else {
+		wg.Add(1)
+		go runTelegramBot(cfg)
+	}
+
 	if !dbExists() {
 		http.HandleFunc("/setup", setupHandler)
 		log.Println("Database not found, redirecting to setup page...")
 	} else {
-		// Если база данных существует, загружаем настройки и продолжаем как обычно
 		http.HandleFunc("/", indexHandler)
 		http.HandleFunc("/debug", debugHandler)
 		http.HandleFunc("/settings", saveSettingsHandler)
@@ -821,11 +1074,35 @@ func main() {
 		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
 		http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
 		http.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
-
 	}
 
 	log.Printf("Starting server on :%d", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func init() {
+	err := createTableIfNotExists()
+	if err != nil {
+		log.Fatalf("Error creating table: %v", err)
+	}
+
+	db, err := openDB()
+	if err != nil {
+		log.Fatal("Failed to open database:", err)
+	}
+
+	var userID int
+	var accessToken string
+
+	row := db.QueryRow("SELECT user_id, access_token FROM settings WHERE id = 2")
+	err = row.Scan(&userID, &accessToken)
+	if err != nil {
+		log.Printf("Warning: Could not load Yandex Music settings: %v", err)
+	}
+
+	client = yamusic.NewClient(yamusic.AccessToken(userID, accessToken))
+
+	db.Close()
 }
