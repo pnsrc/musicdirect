@@ -35,6 +35,8 @@ type Config struct {
 	TelegramToken string
 	Database      *sql.DB
 	YaMusicClient *yamusic.Client
+	CoverURI      string
+	TrackURL      string
 }
 
 var (
@@ -1031,6 +1033,111 @@ func wsBroadcastMessages() {
 	}
 }
 
+type TrackInfo struct {
+	TrackID  int    `json:"track_id"`
+	Title    string `json:"title"`
+	Artist   string `json:"artist"`
+	TrackURL string `json:"track_url"`
+	CoverURI string `json:"cover_uri"`
+	Position int    `json:"position"`
+}
+
+// getTrackInfo retrieves complete track information from Yandex Music
+func getTrackInfo(ctx context.Context, trackID int, client *yamusic.Client) (*TrackInfo, error) {
+	if client == nil {
+		return nil, fmt.Errorf("yandex music client is not initialized")
+	}
+
+	// Get track information
+	trackInfo, resp, err := client.Tracks().Get(ctx, trackID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get track info: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("yandex music API returned non-200 status: %d", resp.StatusCode)
+	}
+	if len(trackInfo.Result) == 0 {
+		return nil, fmt.Errorf("no track information found for ID: %d", trackID)
+	}
+
+	// Get download URL
+	trackURL, err := client.Tracks().GetDownloadURL(ctx, trackID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get track download URL: %w", err)
+	}
+
+	// Process cover URI
+	coverURI := trackInfo.Result[0].Albums[0].CoverURI
+	coverURI = strings.Replace(coverURI, "%25%25", "400x400", -1)
+	coverURI = strings.Replace(coverURI, "%", "", -1)
+
+	// Get track position from database if needed
+	var position int
+	if db != nil { // Assuming db is a global variable
+		err := db.QueryRowContext(ctx,
+			"SELECT position FROM playlist WHERE track_id = ?",
+			trackID).Scan(&position)
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("Warning: failed to get track position: %v", err)
+			// Don't return error as position is non-critical
+		}
+	}
+
+	return &TrackInfo{
+		TrackID:  trackID,
+		Title:    trackInfo.Result[0].Title,
+		Artist:   trackInfo.Result[0].Artists[0].Name,
+		TrackURL: trackURL,
+		CoverURI: coverURI,
+		Position: position,
+	}, nil
+}
+
+// getTrackInfoHandler handles HTTP requests for track information
+func getTrackInfoHandler(w http.ResponseWriter, r *http.Request) {
+	// Set response headers
+	w.Header().Set("Content-Type", "application/json")
+
+	// Get and validate track ID from query parameters
+	trackIDStr := r.URL.Query().Get("trackID")
+	if trackIDStr == "" {
+		http.Error(w, `{"error":"trackID is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	trackID, err := strconv.Atoi(trackIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid trackID format"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Get track information with context
+	trackInfo, err := getTrackInfo(r.Context(), trackID, client)
+	if err != nil {
+		log.Printf("Error getting track info: %v", err)
+		statusCode := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			statusCode = http.StatusNotFound
+		}
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), statusCode)
+		return
+	}
+
+	// Encode and send response
+	if err := json.NewEncoder(w).Encode(trackInfo); err != nil {
+		log.Printf("Error encoding track info response: %v", err)
+		http.Error(w, `{"error":"failed to encode response"}`, http.StatusInternalServerError)
+		return
+	}
+}
+
+//
+
+/*
+    пример js кода для получения информации о треке
+	fetch("/api/track?trackID=12345")
+*/
+
 func main() {
 	// Initialize database connection
 	var err error
@@ -1047,7 +1154,7 @@ func main() {
 	go wsBroadcastMessages()
 
 	cfg := &Config{
-		TelegramToken: "YOUR_TELEGRAM",
+		TelegramToken: "YOUR TOKEN HERE",
 		Database:      db,
 		YaMusicClient: client,
 	}
@@ -1074,6 +1181,7 @@ func main() {
 		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
 		http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
 		http.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
+		http.HandleFunc("/api/track", getTrackInfoHandler)
 	}
 
 	log.Printf("Starting server on :%d", port)

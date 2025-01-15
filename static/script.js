@@ -4,6 +4,10 @@ let player = null;
 let progressInterval;
 let currentSortKey = 'position';
 let previousTrackIds = [];
+let isShuffleEnabled = false;
+let shuffledIndexes = [];
+let volume = 1.0;
+let prevVolume = 1.0;
 
 async function checkForPlaylistUpdates() {
   try {
@@ -23,10 +27,37 @@ async function checkForPlaylistUpdates() {
   }
 }
 
-// Вспомогательная функция для сравнения массивов
 function arraysAreEqual(arr1, arr2) {
   if (arr1.length !== arr2.length) return false;
   return arr1.every((value, index) => value === arr2[index]);
+}
+
+function shuffleArray(array) {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+function toggleShuffle() {
+  isShuffleEnabled = !isShuffleEnabled;
+  const shuffleBtn = document.getElementById('shuffle-btn');
+  
+  if (isShuffleEnabled) {
+    shuffleBtn.classList.add('active');
+    shuffledIndexes = shuffleArray([...tracks.keys()]);
+    const currentIndex = shuffledIndexes.indexOf(currentTrackIndex);
+    if (currentIndex !== -1) {
+      shuffledIndexes.splice(currentIndex, 1);
+      shuffledIndexes.unshift(currentTrackIndex);
+    }
+    showNotification('Случайное воспроизведение включено');
+  } else {
+    shuffleBtn.classList.remove('active');
+    showNotification('Случайное воспроизведение выключено');
+  }
 }
 
 
@@ -36,13 +67,11 @@ async function loadTrackList() {
     if (!response.ok) throw new Error('Ошибка сети');
     tracks = await response.json();
 
-    // Sort tracks based on current sort key
     sortTracks();
 
     const trackListContainer = document.getElementById('track-list');
     trackListContainer.innerHTML = '';
 
-    // Add sort controls
     const sortControls = document.createElement('div');
     sortControls.className = 'sort-controls mb-3';
     sortControls.innerHTML = `
@@ -59,7 +88,6 @@ async function loadTrackList() {
     `;
     trackListContainer.appendChild(sortControls);
 
-    // Add tracks
     tracks.forEach((track, index) => {
       const trackItem = document.createElement('div');
       trackItem.className = 'track';
@@ -79,6 +107,7 @@ async function loadTrackList() {
       `;
       trackItem.addEventListener('click', () => playTrack(index));
       trackListContainer.appendChild(trackItem);
+      showNotification('Плейлист обновлен');
     });
   } catch (error) {
     console.error('Ошибка загрузки треков:', error);
@@ -101,14 +130,11 @@ function changeSortKey(newSortKey) {
   loadTrackList();
 }
 
-// Функция для удаления трека
 function deleteTrack(trackId) {
-  // Подтверждение удаления
   if (!confirm('Вы уверены, что хотите удалить этот трек?')) {
       return;
   }
 
-  // Отправка запроса на удаление
   fetch('/api/tracks/delete', {
       method: 'POST',
       headers: {
@@ -125,14 +151,11 @@ function deleteTrack(trackId) {
       return response.json();
   })
   .then(data => {
-      // Если удаление прошло успешно, удаляем элемент из DOM
       const trackElement = document.querySelector(`[data-track-id="${trackId}"]`);
       if (trackElement) {
           trackElement.remove();
       }
-      // Показываем уведомление об успешном удалении
       showNotification('Трек успешно удален');
-      // Обновляем плейлист
       updatePlaylist();
   })
   .catch(error => {
@@ -146,7 +169,7 @@ function showNotification(message, type = 'success') {
   const notification = document.createElement('div');
   notification.className = `notification ${type}`;
   notification.textContent = message;
-  
+
   document.body.appendChild(notification);
   
   // Удаляем уведомление через 3 секунды
@@ -205,38 +228,134 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
+async function getTrackUrl(trackId) {
+  try {
+    const response = await fetch(`/api/track?trackId=${trackId}`);
+    if (!response.ok) throw new Error('Failed to fetch track URL');
+    const data = await response.json();
+    return data.track_url;
+  } catch (error) {
+    console.error('Error fetching track URL:', error);
+    throw error;
+  }
+}
 
 
+async function playTrack(index) {
+  try {
+    if (player) player.stop();
+    
+    const track = tracks[index];
+    let trackUrl = track.track_url;
+    
+    // Try to create player with original URL first
+    player = new Howl({
+      src: [trackUrl],
+      html5: true,
+      volume: volume,
+      onend: () => playNext(),
+      onplay: updateProgress,
+      onloaderror: async () => {
+        console.log('Failed to load original track URL, trying API endpoint...');
+        try {
+          // If original URL fails, try to get URL from API
+          trackUrl = await getTrackUrl(track.track_id);
+          
+          // Create new player with fallback URL
+          player = new Howl({
+            src: [trackUrl],
+            html5: true,
+            volume: volume,
+            onend: () => playNext(),
+            onplay: updateProgress,
+            onloaderror: () => {
+              console.error('Failed to load track even with fallback URL');
+              showNotification('Ошибка загрузки трека', 'error');
+              playNext(); // Skip to next track on failure
+            }
+          });
+          
+          player.play();
+        } catch (error) {
+          console.error('Failed to get fallback URL:', error);
+          showNotification('Ошибка загрузки трека', 'error');
+          playNext(); // Skip to next track on failure
+        }
+      }
+    });
+    
+    player.play();
+    updateProgress();
+    updateMediaSession(track);
+    currentTrackIndex = index;
 
-function playTrack(index) {
-  if (player) player.stop();
-  player = new Howl({
-    src: [tracks[index].track_url],
-    html5: true,
-    onend: () => playNext(),
-    onplay: updateProgress
-  });
-  player.play();
-  updateProgress();
-  updateMediaSession(tracks[index]);
-  currentTrackIndex = index;
+    document.getElementById('current-track-title').textContent = track.title;
+    document.getElementById('current-track-artist').textContent = track.artist;
+    document.getElementById('cover-img').src = `https://${track.cover_uri}600x600`;
 
-  const track = tracks[index];
-  document.getElementById('current-track-title').textContent = track.title;
-  document.getElementById('current-track-artist').textContent = track.artist;
-  document.getElementById('cover-img').src = `https://${track.cover_uri}600x600`;
+    const hue = Math.floor(Math.random() * 360);
+    document.documentElement.style.setProperty('--accent-color', `hsl(${hue}, 84%, 60%)`);
 
-  // Change accent color
-  const hue = Math.floor(Math.random() * 360);
-  document.documentElement.style.setProperty('--accent-color', `hsl(${hue}, 84%, 60%)`);
-
-  updatePlayPauseIcon(true);
+    updatePlayPauseIcon(true);
+    
+    document.querySelectorAll('.track').forEach(track => track.classList.remove('active'));
+    document.querySelector(`.track[data-index="${index}"]`)?.classList.add('active');
+    
+  } catch (error) {
+    console.error('Error playing track:', error);
+    showNotification('Ошибка воспроизведения трека', 'error');
+    playNext(); // Skip to next track on failure
+  }
 }
 
 function playNext() {
-  currentTrackIndex = (currentTrackIndex + 1) % tracks.length;
+  if (isShuffleEnabled) {
+    const currentShuffleIndex = shuffledIndexes.indexOf(currentTrackIndex);
+    const nextIndex = (currentShuffleIndex + 1) % tracks.length;
+    currentTrackIndex = shuffledIndexes[nextIndex];
+  } else {
+    currentTrackIndex = (currentTrackIndex + 1) % tracks.length;
+  }
   playTrack(currentTrackIndex);
 }
+
+// Функции управления громкостью
+function updateVolume(value) {
+  volume = parseFloat(value);
+  if (player) {
+    player.volume(volume);
+  }
+  updateVolumeIcon();
+  
+  // Анимация слайдера
+  const volumeSlider = document.getElementById('volume-slider');
+  const percentage = volume * 100;
+  volumeSlider.style.background = `linear-gradient(to right, var(--accent-color) ${percentage}%, rgba(255, 255, 255, 0.2) ${percentage}%)`;
+}
+
+function updateVolumeIcon() {
+  const volumeIcon = document.getElementById('volume-icon');
+  if (volume === 0) {
+    volumeIcon.className = 'fas fa-volume-mute';
+  } else if (volume < 0.5) {
+    volumeIcon.className = 'fas fa-volume-down';
+  } else {
+    volumeIcon.className = 'fas fa-volume-up';
+  }
+}
+
+function toggleMute() {
+  const volumeSlider = document.getElementById('volume-slider');
+  if (volume > 0) {
+    prevVolume = volume;
+    updateVolume(0);
+    volumeSlider.value = 0;
+  } else {
+    updateVolume(prevVolume);
+    volumeSlider.value = prevVolume;
+  }
+}
+
 
 function updateProgress() {
   if (progressInterval) clearInterval(progressInterval);
@@ -348,7 +467,6 @@ document.getElementById('add-track-btn').addEventListener('click', async () => {
 });
 
 loadTrackList();
-// Проверка обновлений плейлиста каждые 5 секунд
 setInterval(checkForPlaylistUpdates, 5000);
 
 const socket = new WebSocket(`ws://${window.location.host}/ws`);
@@ -371,8 +489,11 @@ function showNotification(message) {
   }, 3000);
 }
 
-// обрабатываем {"type":"next"} {"type":"pause"} {"type":"now"} {"type":"prev"} и тп от ws switch case
+showNotification('Подключение к ВебСокету...');
 
+socket.onopen = () => {
+  showNotification('Соединение установлено');
+}
 socket.onmessage = (event) => {
   const message = JSON.parse(event.data);
   switch (message.type) {
@@ -390,17 +511,26 @@ socket.onmessage = (event) => {
       }
       break;
     case 'now':
-      // отпраляем текущий трек на сервер
       showNotification('Короче както лень');
       break;
     case 'prev':
       currentTrackIndex = (currentTrackIndex - 1 + tracks.length) % tracks.length;
       playTrack(currentTrackIndex);
       break;
+      case 'shuffle':
+        toggleShuffle();
+        break;
+    case 'volume':
+      if (message.value !== undefined) {
+        updateVolume(message.value);
+        document.getElementById('volume-slider').value = message.value;
+      }
+      break;
   }
 }
 
-// если ws не доступен то показываем уведомление Ебать, сервак наебнулся поднимай
 socket.onclose = () => {
   showNotification('Ебать, сервак наебнулся поднимай');
 }
+
+showNotification('Попробуйте телеграм бота @modushuedosbot');

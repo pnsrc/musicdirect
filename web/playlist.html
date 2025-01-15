@@ -39,6 +39,11 @@
           <button class="control-button" id="next">
             <i class="fas fa-forward"></i>
           </button>
+          <div class="extra-controls">
+          <button class="control-button small" id="shuffle-btn" onclick="toggleShuffle()">
+            <i class="fas fa-random"></i>
+          </button>
+          </div>
         </div>
       </div>
     </div>
@@ -63,8 +68,9 @@
         </div>
         <div class="modal-body">
           <div class="form-group">
+            <p>Попробуйте также телеграм бота t.me/modushuedosbot</p>
             <label for="track-url" class="form-label">URL трека:</label>
-            <input type="text" id="track-url" class="form-control" placeholder="https://example.com/track.mp3">
+            <input type="text" id="track-url" class="form-control" placeholder="https://music.yandex.ru/album/34093419/track/132385077">
           </div>
         </div>
         <div class="modal-footer">
