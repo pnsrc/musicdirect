@@ -20,7 +20,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/gorilla/websocket"
 	_ "github.com/gorilla/websocket"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"pkg.botr.me/yamusic"
 )
 
@@ -46,10 +46,17 @@ var (
 )
 
 func openDB() (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath) // используем "sqlite" вместо "sqlite3"
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Добавляем проверку соединения
+	if err = db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
 	return db, nil
 }
 
@@ -1154,7 +1161,7 @@ func main() {
 	go wsBroadcastMessages()
 
 	cfg := &Config{
-		TelegramToken: "YOUR TOKEN HERE",
+		TelegramToken: "INSERT YOUR TOKEN HERE",
 		Database:      db,
 		YaMusicClient: client,
 	}
