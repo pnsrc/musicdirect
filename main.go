@@ -414,6 +414,8 @@ func dbExists() bool {
 
 // Обработчик для API /api/tracks
 func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	w.Header().Set("Content-Type", "application/json")
 
 	db, err := openDB()
@@ -566,6 +568,8 @@ func addTrackToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 
 // Функция для изменения позиции трека в плейлисте
 func changeTrackPosition(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	// Проверяем, что метод запроса - POST
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -683,6 +687,8 @@ func handleTrackURL(bot *tgbotapi.BotAPI, message *tgbotapi.Message, cfg *Config
 
 // Главная страница
 func indexHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	// Получаем информацию о пользователе с помощью API Яндекс Музыки
 	accountStatus, resp, err := client.Account().GetStatus(r.Context())
 	if err != nil {
@@ -714,6 +720,8 @@ func settingsTemplate(w http.ResponseWriter, r *http.Request) {
 
 // Получение информации о треке
 func getTrackHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	trackID := r.URL.Query().Get("trackID")
 	if trackID == "" {
 		http.Error(w, "Track ID is required", http.StatusBadRequest)
@@ -889,6 +897,8 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
@@ -952,6 +962,8 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 
 // Выводим все track_id из базы данных
 func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	// Открываем базу данных
 	db, err := openDB()
 	if err != nil {
@@ -1102,6 +1114,9 @@ func getTrackInfo(ctx context.Context, trackID int, client *yamusic.Client) (*Tr
 
 // getTrackInfoHandler handles HTTP requests for track information
 func getTrackInfoHandler(w http.ResponseWriter, r *http.Request) {
+	// CORS разрешить использование для всех запросов
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	// Set response headers
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1172,6 +1187,8 @@ func main() {
 		wg.Add(1)
 		go runTelegramBot(cfg)
 	}
+
+	// Разрешить использование cors для всех запросов
 
 	if !dbExists() {
 		http.HandleFunc("/setup", setupHandler)
