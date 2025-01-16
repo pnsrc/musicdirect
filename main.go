@@ -869,7 +869,7 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 	// Информация о приложении
 	appInfo := AppInfo{
 		Name:       "MusicDirect",
-		Version:    "0.0.1b",
+		Version:    "0.0.4",
 		BuildTime:  os.Getenv("BUILD_TIME"),
 		CommitHash: os.Getenv("COMMIT_HASH"),
 		StartTime:  startTime,
