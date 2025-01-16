@@ -10,6 +10,17 @@
     <link href="/static/style.css" rel="stylesheet">
 </head>
 <body>
+  <div class="oops">
+    <div class="forms_code">
+      <div class="form">
+        <div class="title">Добро пожаловать</div>
+        <div class="subtitle">Вижу, что вы тут впервые. Введите ваш код комнаты, либо создайте ее</div>
+        <input class="input" type="text" placeholder="Код комнаты">
+        <button class="btn join">Присоединиться</button>
+        <button class="btn create">Создать комнату</button>
+      </div>
+    </div>
+  </div>
   <div class="gradient"></div>
 
   <div class="main-container">
@@ -51,10 +62,12 @@
     <div class="playlist-section">
       <div class="playlist-header">
         <h2>Плейлист</h2>
+        <p id="room-code-display" class="text-muted">Код комнаты: <span id="room-code">12345</span></p>
         <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addTrackModal">
           <i class="fas fa-plus"></i> Добавить
         </button>
       </div>
+      
       <div class="track-list" id="track-list"></div>
     </div>
   </div>

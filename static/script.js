@@ -7,7 +7,8 @@ let previousTrackIds = [];
 
 async function checkForPlaylistUpdates() {
   try {
-    const response = await fetch('/api/tracks/all');
+    // /api/tracks/all?room_code=
+    const response = await fetch(`/api/tracks/all?room_code=${getRoomCode()}`);
     if (!response.ok) throw new Error('Ошибка сети');
 
     const currentTrackIds = await response.json();
@@ -29,10 +30,23 @@ function arraysAreEqual(arr1, arr2) {
   return arr1.every((value, index) => value === arr2[index]);
 }
 
+function showNotification(message, type = 'success') {
+  const notification = document.createElement('div');
+  notification.className = `notification ${type}`;
+  notification.textContent = message;
+  
+  document.body.appendChild(notification);
+  
+  // Удаляем уведомление через 3 секунды
+  setTimeout(() => {
+      notification.remove();
+  }, 3000);
+}
+
 
 async function loadTrackList() {
   try {
-    const response = await fetch('/api/tracks');
+    const response = await fetch('/api/tracks?room_code=' + getRoomCode());
     if (!response.ok) throw new Error('Ошибка сети');
     tracks = await response.json();
 
@@ -80,6 +94,9 @@ async function loadTrackList() {
       trackItem.addEventListener('click', () => playTrack(index));
       trackListContainer.appendChild(trackItem);
     });
+
+    document.getElementById("room-code").textContent = getRoomCode();
+
   } catch (error) {
     console.error('Ошибка загрузки треков:', error);
   }
@@ -115,7 +132,8 @@ function deleteTrack(trackId) {
           'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-          track_id: trackId
+          track_id: trackId,
+          room_code: getRoomCode()
       })
   })
   .then(response => {
@@ -157,7 +175,7 @@ function showNotification(message, type = 'success') {
 
 // Функция обновления плейлиста
 function updatePlaylist() {
-  fetch('/api/tracks')
+  fetch('/api/tracks?room_code=' + getRoomCode())
       .then(response => response.json())
       .then(tracks => {
           const playlist = document.querySelector('.playlist');
@@ -328,10 +346,10 @@ document.getElementById('add-track-btn').addEventListener('click', async () => {
   const trackUrl = document.getElementById('track-url').value;
   if (trackUrl) {
     try {
-      const response = await fetch('/add-track', {
+      const response = await fetch('/add-track?=room_code=' + getRoomCode(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ track_url: trackUrl }),
+        body: JSON.stringify({ track_url: trackUrl, room_code: getRoomCode() }),
       });
       if (response.ok) {
         loadTrackList();
@@ -404,3 +422,88 @@ socket.onmessage = (event) => {
 socket.onclose = () => {
   showNotification('Ебать, сервак наебнулся поднимай');
 }
+
+function getRoomCode() {
+  return localStorage.getItem('room_code');
+}
+
+function setRoomCode(roomCode) {
+  localStorage.setItem('room_code', roomCode);
+}
+
+function clearRoomCode() {
+  localStorage.removeItem('room_code');
+}
+
+const roomCode = getRoomCode();
+const oopsElement = document.querySelector('.oops');
+
+if (roomCode && oopsElement) {
+  oopsElement.style.display = 'none';
+}
+
+function createRoom() {
+  fetch('/api/room/create')
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error('Ошибка сети при создании комнаты');
+      }
+      return response.json();
+    })
+    .then((data) => {
+      if (data.code) {
+        setRoomCode(data.code);
+        if (oopsElement) {
+          oopsElement.style.display = 'none';
+        }
+      } else {
+        throw new Error('Не удалось получить код комнаты');
+      }
+    })
+    .catch((error) => {
+      console.error('Error:', error);
+      showNotification('Ошибка при создании комнаты: ' + error.message, 'error');
+    });
+}
+
+// подключение успешно если пришло это {"room_id":1}
+function joinRoom(roomCode) {
+  fetch('/api/room/join', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ room_code: roomCode }),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        throw new Error('Ошибка сети при подключении к комнате');
+      }
+      return response.json();
+    })
+    .then((data) => {
+      if (data.room_id) {
+        setRoomCode(roomCode);
+        if (oopsElement) {
+          oopsElement.style.display = 'none';
+        }
+      } else {
+        throw new Error('Не удалось подключиться к комнате');
+      }
+    })
+    .catch((error) => {
+      console.error('Error:', error);
+      showNotification('Ошибка при подключении к комнате: ' + error.message, 'error');
+    });
+}
+
+
+document.querySelector('.create')?.addEventListener('click', createRoom);
+
+document.querySelector('.join')?.addEventListener('click', () => {
+  const roomCodeInput = document.querySelector('.input');
+  if (roomCodeInput) {
+    const roomCode = roomCodeInput.value;
+    joinRoom(roomCode);
+  }
+});

@@ -20,6 +20,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/gorilla/websocket"
 	_ "github.com/gorilla/websocket"
+	"golang.org/x/exp/rand"
 	_ "modernc.org/sqlite"
 	"pkg.botr.me/yamusic"
 )
@@ -71,8 +72,10 @@ func createTableIfNotExists() error {
 	// Создание таблицы playlist
 	createPlaylistQuery := `
     CREATE TABLE IF NOT EXISTS playlist (
-        track_id INTEGER PRIMARY KEY,
+		id integer PRIMARY KEY,
+        track_id INTEGER NOT NULL,
         date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		room_id INTEGER DEFAULT 0,
         position INTEGER DEFAULT 0
     );`
 
@@ -83,6 +86,13 @@ func createTableIfNotExists() error {
         user_id INTEGER NOT NULL,
         access_token TEXT NOT NULL
     );`
+
+	createRoomsQuery := `
+	CREATE TABLE IF NOT EXISTS rooms (
+		id INTEGER PRIMARY KEY,
+		code TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);`
 
 	// Начинаем транзакцию
 	tx, err := db.Begin()
@@ -99,6 +109,11 @@ func createTableIfNotExists() error {
 	if _, err := tx.Exec(createSettingsQuery); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("failed to create settings table: %w", err)
+	}
+
+	if _, err := tx.Exec(createRoomsQuery); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to create rooms table: %w", err)
 	}
 
 	// Подтверждаем транзакцию
@@ -416,6 +431,22 @@ func dbExists() bool {
 func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	// требуем room_code
+	roomCode := r.URL.Query().Get("room_code")
+	if roomCode == "" {
+		http.Error(w, "Room code is required", http.StatusBadRequest)
+		return
+	}
+
+	// проверяем is_room_exists
+	var exists bool
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", roomCode).Scan(&exists)
+	if err != nil {
+		log.Printf("Error checking room existence: %v", err)
+		http.Error(w, "Error checking room existence", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 
 	db, err := openDB()
@@ -425,7 +456,7 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	// Изменяем запрос для получения track_id и position
-	rows, err := db.Query("SELECT track_id, position FROM playlist ORDER BY position")
+	rows, err := db.Query("SELECT track_id, position FROM playlist WHERE room_id = ? ORDER BY id", roomCode)
 	if err != nil {
 		log.Printf("Error fetching playlist: %v", err)
 		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
@@ -505,65 +536,79 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 
 // Обработчик для добавления трека в плейлист
 func addTrackToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		// Чтение данных из тела запроса
-		var requestData struct {
-			TrackURL string `json:"track_url"` // track_url как строка
-		}
-
-		// Декодируем JSON в структуру
-		err := json.NewDecoder(r.Body).Decode(&requestData)
-		if err != nil {
-			log.Printf("Error decoding JSON: %v", err)
-			http.Error(w, "Invalid request data", http.StatusBadRequest)
-			return
-		}
-
-		// Извлекаем track_id из URL
-		trackID, err := extractTrackID(requestData.TrackURL)
-		if err != nil {
-			log.Printf("Error extracting track ID: %v", err)
-			http.Error(w, "Invalid track URL", http.StatusBadRequest)
-			return
-		}
-
-		// Открываем базу данных для добавления трека
-		db, err := openDB()
-		if err != nil {
-			log.Printf("Failed to open database: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-		defer db.Close()
-
-		// Проверка, существует ли уже этот трек в плейлисте
-		var exists bool
-		err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM playlist WHERE track_id = ?)", trackID).Scan(&exists)
-		if err != nil {
-			log.Printf("Error checking if track exists: %v", err)
-			http.Error(w, "Error checking track existence", http.StatusInternalServerError)
-			return
-		}
-
-		if exists {
-			http.Error(w, "Track already exists in the playlist", http.StatusConflict)
-			return
-		}
-
-		// Вставляем трек в таблицу playlist
-		_, err = db.Exec("INSERT INTO playlist (track_id) VALUES (?)", trackID)
-		if err != nil {
-			log.Printf("Error adding track to playlist: %v", err)
-			http.Error(w, "Error adding track to playlist", http.StatusInternalServerError)
-			return
-		}
-
-		// Перенаправляем на страницу плейлиста после успешного добавления
-		http.Redirect(w, r, "/playlist", http.StatusFound)
-	} else {
-		// Если не POST-запрос, показываем ошибку
+	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
 	}
+
+	// Чтение данных из тела запроса
+	var requestData struct {
+		TrackURL string `json:"track_url"` // track_url как строка
+		RoomCode string `json:"room_code"` // room_code как строка
+	}
+
+	// Декодируем JSON в структуру
+	err := json.NewDecoder(r.Body).Decode(&requestData)
+	if err != nil {
+		log.Printf("Error decoding JSON: %v", err)
+		http.Error(w, "Invalid request data", http.StatusBadRequest)
+		return
+	}
+
+	// Проверяем наличие RoomCode
+	if requestData.RoomCode == "" {
+		http.Error(w, "Room code is required", http.StatusBadRequest)
+		return
+	}
+
+	// Извлекаем track_id из URL
+	trackID, err := extractTrackID(requestData.TrackURL)
+	if err != nil {
+		log.Printf("Error extracting track ID: %v", err)
+		http.Error(w, "Invalid track URL", http.StatusBadRequest)
+		return
+	}
+
+	// Открываем базу данных для добавления трека
+	db, err := openDB()
+	if err != nil {
+		log.Printf("Failed to open database: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+
+	// Проверка, существует ли уже этот трек в плейлисте в этой комнате
+	var exists bool
+	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM playlist WHERE track_id = ? AND room_id = ?)", trackID, requestData.RoomCode).Scan(&exists)
+	if err != nil {
+		log.Printf("Error checking track existence: %v", err)
+		http.Error(w, "Error checking track existence", http.StatusInternalServerError)
+		return
+	}
+
+	if exists {
+		http.Error(w, "Track already exists in the playlist", http.StatusConflict)
+		return
+	}
+
+	// Вставляем трек в таблицу playlist
+	_, err = db.Exec("INSERT INTO playlist (track_id, room_id) VALUES (?, ?)", trackID, requestData.RoomCode)
+	if err != nil {
+		log.Printf("Error adding track to playlist: %v", err)
+		http.Error(w, "Error adding track to playlist", http.StatusInternalServerError)
+		return
+	}
+
+	// Уведомляем через WebSocket
+	wsBroadcast <- map[string]string{
+		"type":    "notification",
+		"message": "Трек успешно добавлен в плейлист",
+		"code":    "success",
+	}
+
+	// Перенаправляем на страницу плейлиста после успешного добавления
+	http.Redirect(w, r, "/playlist", http.StatusFound)
 }
 
 // Функция для изменения позиции трека в плейлисте
@@ -909,7 +954,22 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Декодируем данные запроса
 	var requestData struct {
-		TrackID int `json:"track_id"`
+		TrackID  int    `json:"track_id"`
+		RoomCode string `json:"room_code"`
+	}
+
+	// требуем room_code
+	if requestData.RoomCode == "" {
+		http.Error(w, "Room code is required", http.StatusBadRequest)
+		return
+	}
+
+	var exists bool
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", requestData.RoomCode).Scan(&exists)
+	if err != nil {
+		log.Printf("Error checking room existence: %v", err)
+		http.Error(w, "Error checking room existence", http.StatusInternalServerError)
+		return
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
@@ -928,7 +988,7 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	// Удаляем трек
-	result, err := db.Exec("DELETE FROM playlist WHERE track_id = ?", requestData.TrackID)
+	result, err := db.Exec("DELETE FROM playlist WHERE track_id = ? AND room_id = ?", requestData.TrackID, requestData.RoomCode)
 	if err != nil {
 		log.Printf("Error deleting track from playlist: %v", err)
 		http.Error(w, "Error deleting track from playlist", http.StatusInternalServerError)
@@ -964,6 +1024,22 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	// принимаем room_code из запроса
+	roomCode := r.URL.Query().Get("room_code")
+	// если room_code не передан, возвращаем ошибку
+	if roomCode == "" {
+		http.Error(w, "Room code is required", http.StatusBadRequest)
+		return
+	}
+
+	var exists bool
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", roomCode).Scan(&exists)
+	if err != nil {
+		log.Printf("Error checking room existence: %v", err)
+		http.Error(w, "Error checking room existence", http.StatusInternalServerError)
+		return
+	}
+
 	// Открываем базу данных
 	db, err := openDB()
 	if err != nil {
@@ -972,7 +1048,7 @@ func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	// Запрашиваем все track_id
-	rows, err := db.Query("SELECT track_id FROM playlist")
+	rows, err := db.Query("SELECT track_id FROM playlist WHERE room_id = ?", roomCode)
 	if err != nil {
 		log.Printf("Error fetching playlist: %v", err)
 		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
@@ -1153,6 +1229,173 @@ func getTrackInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func createRoomHandler(w http.ResponseWriter, r *http.Request) {
+	db, err := openDB()
+	if err != nil {
+		log.Printf("Failed to open database: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+
+	// Генерируем уникальный код комнаты (6 символов)
+	code := generateRoomCode(5)
+
+	// Создаем комнату в БД
+	result, err := db.Exec(`
+        INSERT INTO rooms (code, created_at) 
+        VALUES (?, CURRENT_TIMESTAMP)`,
+		code,
+	)
+	if err != nil {
+		log.Printf("Error creating room: %v", err)
+		http.Error(w, "Error creating room", http.StatusInternalServerError)
+		return
+	}
+
+	// Получаем ID созданной комнаты
+	roomID, _ := result.LastInsertId()
+
+	// Отправляем ответ с кодом комнаты
+	response := struct {
+		ID   int64  `json:"id"`
+		Code string `json:"code"`
+	}{
+		ID:   roomID,
+		Code: code,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// SQL для создания таблицы rooms
+func createRoomsTable(db *sql.DB) error {
+	_, err := db.Exec(`
+    CREATE TABLE IF NOT EXISTS rooms (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`)
+	return err
+}
+
+func joinRoomHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Чтение данных из тела запроса
+	var requestData struct {
+		RoomCode string `json:"room_code"`
+	}
+
+	// Декодируем JSON в структуру
+	err := json.NewDecoder(r.Body).Decode(&requestData)
+	if err != nil {
+		log.Printf("Error decoding JSON: %v", err)
+		http.Error(w, "Invalid request data", http.StatusBadRequest)
+		return
+	}
+
+	// Проверяем, существует ли комната с таким кодом
+	var roomID int
+	err = db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
+	if err != nil {
+		log.Printf("Error checking room existence: %v", err)
+		http.Error(w, "Error checking room existence", http.StatusInternalServerError)
+		return
+	}
+
+	// Отправляем ответ с ID комнаты
+	response := struct {
+		RoomID int `json:"room_id"`
+	}{
+		RoomID: roomID,
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding response: %v", err)
+		http.Error(w, "Error encoding response", http.StatusInternalServerError)
+	}
+}
+
+func generateRoomCode(length int) string {
+	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	code := make([]byte, length)
+	for i := range code {
+		code[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(code)
+}
+
+func getRoomPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	roomIDStr := r.URL.Query().Get("roomID")
+	if roomIDStr == "" {
+		http.Error(w, "Room ID is required", http.StatusBadRequest)
+		return
+	}
+
+	roomID, err := strconv.Atoi(roomIDStr)
+	if err != nil {
+		http.Error(w, "Invalid room ID", http.StatusBadRequest)
+		return
+	}
+
+	// Получаем треки комнаты
+	tracks, err := getRoomTracks(roomID)
+	if err != nil {
+		log.Printf("Error getting room tracks: %v", err)
+		http.Error(w, "Error getting room tracks", http.StatusInternalServerError)
+		return
+	}
+
+	// Отправляем треки в формате JSON
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(tracks); err != nil {
+		log.Printf("Error encoding room tracks: %v", err)
+		http.Error(w, "Error encoding room tracks", http.StatusInternalServerError)
+	}
+}
+
+func getRoomTracks(roomID int) ([]TrackInfo, error) {
+	rows, err := db.Query("SELECT track_id FROM playlist WHERE room_id = ? ORDER BY position", roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tracks []TrackInfo
+	for rows.Next() {
+		var trackID int
+		if err := rows.Scan(&trackID); err != nil {
+			return nil, err
+		}
+
+		trackInfo, err := getTrackInfo(context.Background(), trackID, client)
+		if err != nil {
+			log.Printf("Error getting track info: %v", err)
+			continue
+		}
+
+		tracks = append(tracks, *trackInfo)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tracks, nil
+}
+
+func isExistRoomCode(code string) (bool, error) {
+	var exists bool
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", code).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 //
 
 /*
@@ -1175,19 +1418,6 @@ func main() {
 	http.HandleFunc("/ws", wsHandler)
 	go wsBroadcastMessages()
 
-	cfg := &Config{
-		TelegramToken: "INSERT YOUR TOKEN HERE",
-		Database:      db,
-		YaMusicClient: client,
-	}
-
-	if cfg.TelegramToken == "" {
-		log.Println("Warning: TELEGRAM_BOT_TOKEN not set, Telegram bot will not be started")
-	} else {
-		wg.Add(1)
-		go runTelegramBot(cfg)
-	}
-
 	// Разрешить использование cors для всех запросов
 
 	if !dbExists() {
@@ -1206,6 +1436,9 @@ func main() {
 		http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
 		http.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
 		http.HandleFunc("/api/track", getTrackInfoHandler)
+		http.HandleFunc("/api/room/create", createRoomHandler)
+		http.HandleFunc("/api/room/join", joinRoomHandler)
+		http.HandleFunc("/api/room/status", getRoomPlaylistHandler)
 	}
 
 	log.Printf("Starting server on :%d", port)
