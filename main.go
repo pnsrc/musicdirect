@@ -953,12 +953,19 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Декодируем данные запроса {"track_id":131932333,"room_code":"E9GD3"}
+	// почему-то он не видит, хотя в теле запроса мы его передаем room_code
+	//
 	var requestData struct {
 		TrackID  int    `json:"track_id"`
 		RoomCode string `json:"room_code"`
 	}
 
-	// если {"track_id":131932333,"room_code":"E9GD3"}
+	// Декодируем JSON в структуру
+	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
+		log.Printf("Error decoding request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	// Проверяем наличие room_code
 	if requestData.RoomCode == "" {
