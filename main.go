@@ -952,13 +952,15 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	// Устанавливаем заголовок для JSON ответа
 	w.Header().Set("Content-Type", "application/json")
 
-	// Декодируем данные запроса
+	// Декодируем данные запроса {"track_id":131932333,"room_code":"E9GD3"}
 	var requestData struct {
 		TrackID  int    `json:"track_id"`
 		RoomCode string `json:"room_code"`
 	}
 
-	// требуем room_code
+	// если {"track_id":131932333,"room_code":"E9GD3"}
+
+	// Проверяем наличие room_code
 	if requestData.RoomCode == "" {
 		http.Error(w, "Room code is required", http.StatusBadRequest)
 		return

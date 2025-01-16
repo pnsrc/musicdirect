@@ -507,3 +507,27 @@ document.querySelector('.join')?.addEventListener('click', () => {
     joinRoom(roomCode);
   }
 });
+
+function toggleShuffle() {
+  const shuffleButton = document.getElementById('shuffle');
+  const isShuffled = shuffleButton.classList.contains('active');
+  if (isShuffled) {
+    shuffleButton.classList.remove('active');
+    tracks = tracks.sort((a, b) => a.position - b.position);
+  } else {
+    shuffleButton.classList.add('active');
+    tracks = shuffle(tracks);
+  }
+  loadTrackList();
+}
+
+function shuffle(array) {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+document.getElementById('shuffle').addEventListener('click', toggleShuffle);
