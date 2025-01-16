@@ -967,12 +967,6 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверяем наличие room_code
-	if requestData.RoomCode == "" {
-		http.Error(w, "Room code is required", http.StatusBadRequest)
-		return
-	}
-
 	var exists bool
 	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", requestData.RoomCode).Scan(&exists)
 	if err != nil {
