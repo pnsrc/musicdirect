@@ -942,85 +942,82 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+	// Устанавливаем CORS и Content-Type заголовки
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
 
+	// Проверяем метод
 	if r.Method != http.MethodPost {
-		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Устанавливаем заголовок для JSON ответа
-	w.Header().Set("Content-Type", "application/json")
-
-	// Декодируем данные запроса {"track_id":131932333,"room_code":"E9GD3"}
-	// почему-то он не видит, хотя в теле запроса мы его передаем room_code
-	//
+	// Читаем тело запроса
 	var requestData struct {
 		TrackID  int    `json:"track_id"`
 		RoomCode string `json:"room_code"`
 	}
 
-	// Декодируем JSON в структуру
 	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
-		log.Printf("Error decoding request body: %v", err)
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		log.Printf("Error decoding request: %v", err)
+		http.Error(w, "Invalid request data", http.StatusBadRequest)
 		return
 	}
 
-	var exists bool
-	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", requestData.RoomCode).Scan(&exists)
-	if err != nil {
-		log.Printf("Error checking room existence: %v", err)
-		http.Error(w, "Error checking room existence", http.StatusInternalServerError)
-		return
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
-		log.Printf("Error decoding request body: %v", err)
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Открываем базу данных
+	// Открываем БД
 	db, err := openDB()
 	if err != nil {
-		log.Printf("Failed to open database: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		log.Printf("Database error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
 	defer db.Close()
 
+	// Проверяем существование комнаты
+	var roomExists bool
+	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", requestData.RoomCode).Scan(&roomExists)
+	if err != nil {
+		log.Printf("Room check error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	if !roomExists {
+		http.Error(w, "Room not found", http.StatusNotFound)
+		return
+	}
+
+	// Получаем room_id по room_code
+	var roomID int
+	err = db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
+	if err != nil {
+		log.Printf("Error getting room ID: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
 	// Удаляем трек
-	result, err := db.Exec("DELETE FROM playlist WHERE track_id = ? AND room_id = ?", requestData.TrackID, requestData.RoomCode)
+	result, err := db.Exec("DELETE FROM playlist WHERE track_id = ? AND room_id = ?",
+		requestData.TrackID, roomID)
 	if err != nil {
-		log.Printf("Error deleting track from playlist: %v", err)
-		http.Error(w, "Error deleting track from playlist", http.StatusInternalServerError)
+		log.Printf("Delete error: %v", err)
+		http.Error(w, "Delete error", http.StatusInternalServerError)
 		return
 	}
 
-	// Проверяем, был ли удален трек
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		log.Printf("Error checking rows affected: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	// Проверяем результат
+	rowsAffected, _ := result.RowsAffected()
 
-	// Формируем ответ
 	response := struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}{
 		Success: rowsAffected > 0,
-		Message: "Track successfully deleted",
+		Message: "Track deleted successfully",
 	}
 
-	// Отправляем JSON ответ
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding response: %v", err)
-		http.Error(w, "Error encoding response", http.StatusInternalServerError)
-		return
-	}
+	// Отправляем ответ
+	json.NewEncoder(w).Encode(response)
 }
 
 // Выводим все track_id из базы данных
