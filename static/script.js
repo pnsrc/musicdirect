@@ -122,7 +122,7 @@ function changeSortKey(newSortKey) {
 function deleteTrack(trackId) {
   // Get room code from URL query parameter or localStorage
   const urlParams = new URLSearchParams(window.location.search);
-  const roomCode = urlParams.get('room') || localStorage.getItem('roomCode');
+  const roomCode = urlParams.get('room_code') || localStorage.getItem('room_code');
   
   if (!roomCode) {
       showNotification('Room code not found', 'error');
