@@ -436,7 +436,7 @@ loadTrackList();
 // Проверка обновлений плейлиста каждые 5 секунд
 setInterval(checkForPlaylistUpdates, 5000);
 
-const socket = new WebSocket(`ws://${window.location.host}/ws`);
+const socket = new WebSocket(`wss://${window.location.host}/ws`);
 
 socket.onmessage = (event) => {
   const message = JSON.parse(event.data);
@@ -596,3 +596,18 @@ function shuffle(array) {
   }
   return shuffled;
 }
+document.addEventListener('DOMContentLoaded', () => {
+  const createButton = document.querySelector('.create');
+  const joinButton = document.querySelector('.join');
+  const roomCodeInput = document.querySelector('.input');
+
+  if (createButton) {
+    createButton.addEventListener('click', createRoom);
+  }
+
+  if (joinButton && roomCodeInput) {
+    joinButton.addEventListener('click', () => {
+      joinRoom(roomCodeInput.value);
+    });
+  }
+});
