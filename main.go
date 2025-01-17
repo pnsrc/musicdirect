@@ -20,7 +20,6 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/gorilla/websocket"
 	_ "github.com/gorilla/websocket"
-	"github.com/joho/godotenv"
 	"golang.org/x/exp/rand"
 	_ "modernc.org/sqlite"
 	"pkg.botr.me/yamusic"
@@ -39,13 +38,6 @@ type Config struct {
 	YaMusicClient *yamusic.Client
 	CoverURI      string
 	TrackURL      string
-}
-
-type ServerConfig struct {
-	Port    int
-	SSLCert string
-	SSLKey  string
-	UseTLS  bool
 }
 
 var (
@@ -67,51 +59,6 @@ func openDB() (*sql.DB, error) {
 	}
 
 	return db, nil
-}
-
-func loadEnvConfig() (*ServerConfig, error) {
-	// Load .env file if it exists
-	if err := godotenv.Load(); err != nil {
-		// Only log a warning as .env file is optional
-		log.Printf("Warning: .env file not found: %v", err)
-	}
-
-	config := &ServerConfig{}
-
-	// Set default port
-	config.Port = 8080
-
-	// Override port from environment if specified
-	if portStr := os.Getenv("PORT"); portStr != "" {
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid PORT value: %v", err)
-		}
-		config.Port = port
-	}
-
-	// Load SSL configuration
-	config.SSLCert = os.Getenv("SSL_CERT")
-	config.SSLKey = os.Getenv("SSL_KEY")
-
-	// Validate SSL configuration if provided
-	if config.SSLCert != "" || config.SSLKey != "" {
-		if config.SSLCert == "" || config.SSLKey == "" {
-			return nil, fmt.Errorf("both SSL_CERT and SSL_KEY must be provided for SSL configuration")
-		}
-
-		// Check if certificate files exist
-		if _, err := os.Stat(config.SSLCert); os.IsNotExist(err) {
-			return nil, fmt.Errorf("SSL certificate file not found: %s", config.SSLCert)
-		}
-		if _, err := os.Stat(config.SSLKey); os.IsNotExist(err) {
-			return nil, fmt.Errorf("SSL key file not found: %s", config.SSLKey)
-		}
-
-		config.UseTLS = true
-	}
-
-	return config, nil
 }
 
 func createTableIfNotExists() error {
@@ -1029,6 +976,19 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get room ID from room code
+	var roomID int
+	err := db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			sendJSONError(w, "Room not found", http.StatusNotFound)
+		} else {
+			log.Printf("Database error getting room: %v", err)
+			sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
 	// Begin transaction
 	tx, err := db.Begin()
 	if err != nil {
@@ -1038,28 +998,10 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// First verify the track exists in the playlist for this room
-	var exists bool
-	err = tx.QueryRow(
-		"SELECT EXISTS(SELECT 1 FROM playlist p JOIN rooms r ON p.room_id = r.code WHERE p.track_id = ? AND r.code = ?)",
-		requestData.TrackID, requestData.RoomCode,
-	).Scan(&exists)
-
-	if err != nil {
-		log.Printf("Error checking track existence: %v", err)
-		sendJSONError(w, "Error verifying track", http.StatusInternalServerError)
-		return
-	}
-
-	if !exists {
-		sendJSONError(w, "Track not found in playlist", http.StatusNotFound)
-		return
-	}
-
-	// Delete the track using the room code
+	// Delete the track
 	result, err := tx.Exec(
 		"DELETE FROM playlist WHERE track_id = ? AND room_id = ?",
-		requestData.TrackID, requestData.RoomCode,
+		requestData.TrackID, roomID,
 	)
 	if err != nil {
 		log.Printf("Error deleting track: %v", err)
@@ -1493,18 +1435,6 @@ func isExistRoomCode(code string) (bool, error) {
 	return exists, nil
 }
 
-func startServer(config *ServerConfig) error {
-	addr := fmt.Sprintf(":%d", config.Port)
-
-	if config.UseTLS {
-		log.Printf("Starting HTTPS server on %s", addr)
-		return http.ListenAndServeTLS(addr, config.SSLCert, config.SSLKey, nil)
-	}
-
-	log.Printf("Starting HTTP server on %s", addr)
-	return http.ListenAndServe(addr, nil)
-}
-
 //
 
 /*
@@ -1519,53 +1449,39 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
-	defer db.Close()
+	defer db.Close() // Close database when main exits
 
-	// Load configuration from .env and environment variables
-	config, err := loadEnvConfig()
-	if err != nil {
-		log.Fatal("Failed to load configuration:", err)
-	}
-
-	// Set up static file serving
 	fs := http.FileServer(http.Dir(staticDir))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	// Set up WebSocket handling
 	http.HandleFunc("/ws", wsHandler)
 	go wsBroadcastMessages()
 
-	// Set up routes based on database existence
 	if !dbExists() {
 		http.HandleFunc("/setup", setupHandler)
 		log.Println("Database not found, redirecting to setup page...")
 	} else {
-		setupRoutes()
+		http.HandleFunc("/", indexHandler)
+		http.HandleFunc("/debug", debugHandler)
+		http.HandleFunc("/settings", saveSettingsHandler)
+		http.HandleFunc("/page/settings", settingsTemplate)
+		http.HandleFunc("/get-track", getTrackHandler)
+		http.HandleFunc("/playlist", playlistHandler)
+		http.HandleFunc("/add-track", addTrackToPlaylistHandler)
+		http.HandleFunc("/api/tracks", apiTracksHandler)
+		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
+		http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
+		http.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
+		http.HandleFunc("/api/track", getTrackInfoHandler)
+		http.HandleFunc("/api/room/create", createRoomHandler)
+		http.HandleFunc("/api/room/join", joinRoomHandler)
+		http.HandleFunc("/api/room/status", getRoomPlaylistHandler)
 	}
 
-	// Start the server
-	if err := startServer(config); err != nil {
-		log.Fatal("Server error:", err)
+	log.Printf("Starting server on :%d", port)
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil); err != nil {
+		log.Fatal(err)
 	}
-}
-
-// setupRoutes configures all the HTTP routes
-func setupRoutes() {
-	http.HandleFunc("/", indexHandler)
-	http.HandleFunc("/debug", debugHandler)
-	http.HandleFunc("/settings", saveSettingsHandler)
-	http.HandleFunc("/page/settings", settingsTemplate)
-	http.HandleFunc("/get-track", getTrackHandler)
-	http.HandleFunc("/playlist", playlistHandler)
-	http.HandleFunc("/add-track", addTrackToPlaylistHandler)
-	http.HandleFunc("/api/tracks", apiTracksHandler)
-	http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
-	http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
-	http.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
-	http.HandleFunc("/api/track", getTrackInfoHandler)
-	http.HandleFunc("/api/room/create", createRoomHandler)
-	http.HandleFunc("/api/room/join", joinRoomHandler)
-	http.HandleFunc("/api/room/status", getRoomPlaylistHandler)
 }
 
 func init() {

@@ -437,7 +437,7 @@ loadTrackList();
 // Проверка обновлений плейлиста каждые 5 секунд
 setInterval(checkForPlaylistUpdates, 5000);
 
-const socket = new WebSocket(`wss://${window.location.host}/ws`);
+const socket = new WebSocket(`ws://${window.location.host}/ws`);
 
 socket.onmessage = (event) => {
   const message = JSON.parse(event.data);
