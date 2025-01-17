@@ -467,12 +467,13 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var tracks []struct {
-		TrackID  int    `json:"track_id"`
-		Title    string `json:"title"`
-		Artist   string `json:"artist"`
-		TrackURL string `json:"track_url"`
-		CoverURI string `json:"cover_uri"`
-		Position int    `json:"position"`
+		TrackID    int    `json:"track_id"`
+		Title      string `json:"title"`
+		Artist     string `json:"artist"`
+		TrackURL   string `json:"track_url"`
+		CoverURI   string `json:"cover_uri"`
+		Position   int    `json:"position"`
+		DurationMs int    `json:"duration_ms"`
 	}
 
 	for rows.Next() {
@@ -507,19 +508,21 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 		coverURI = strings.Replace(coverURI, "%", "", -1)
 
 		tracks = append(tracks, struct {
-			TrackID  int    `json:"track_id"`
-			Title    string `json:"title"`
-			Artist   string `json:"artist"`
-			TrackURL string `json:"track_url"`
-			CoverURI string `json:"cover_uri"`
-			Position int    `json:"position"`
+			TrackID    int    `json:"track_id"`
+			Title      string `json:"title"`
+			Artist     string `json:"artist"`
+			TrackURL   string `json:"track_url"`
+			CoverURI   string `json:"cover_uri"`
+			Position   int    `json:"position"`
+			DurationMs int    `json:"duration_ms"`
 		}{
-			TrackID:  track.TrackID,
-			Title:    title,
-			Artist:   artist,
-			TrackURL: trackURL,
-			CoverURI: coverURI,
-			Position: track.Position, // Теперь position будет корректно передаваться
+			TrackID:    track.TrackID,
+			Title:      title,
+			Artist:     artist,
+			TrackURL:   trackURL,
+			CoverURI:   coverURI,
+			Position:   track.Position, // Теперь position будет корректно передаваться
+			DurationMs: trackInfo.Result[0].DurationMs,
 		})
 	}
 
@@ -545,21 +548,12 @@ func addTrackToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Чтение данных из тела запроса
 	var requestData struct {
-		TrackURL string `json:"track_url"` // track_url как строка
-		RoomCode string `json:"room_code"` // room_code как строка
+		TrackURL string `json:"track_url"`
 	}
 
-	// Декодируем JSON в структуру
-	err := json.NewDecoder(r.Body).Decode(&requestData)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
 		log.Printf("Error decoding JSON: %v", err)
 		http.Error(w, "Invalid request data", http.StatusBadRequest)
-		return
-	}
-
-	// Проверяем наличие RoomCode
-	if requestData.RoomCode == "" {
-		http.Error(w, "Room code is required", http.StatusBadRequest)
 		return
 	}
 
@@ -571,21 +565,11 @@ func addTrackToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Открываем базу данных для добавления трека
-	db, err := openDB()
-	if err != nil {
-		log.Printf("Failed to open database: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
-
-	// Проверка, существует ли уже этот трек в плейлисте в этой комнате
-	var exists bool
-	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM playlist WHERE track_id = ? AND room_id = ?)", trackID, requestData.RoomCode).Scan(&exists)
+	// Проверка существования трека в базе данных
+	exists, err := checkTrackExists(trackID, db)
 	if err != nil {
 		log.Printf("Error checking track existence: %v", err)
-		http.Error(w, "Error checking track existence", http.StatusInternalServerError)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -594,23 +578,17 @@ func addTrackToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Вставляем трек в таблицу playlist
-	_, err = db.Exec("INSERT INTO playlist (track_id, room_id) VALUES (?, ?)", trackID, requestData.RoomCode)
+	// Добавление трека в плейлист
+	err = addTrackToPlaylist(trackID, db)
 	if err != nil {
 		log.Printf("Error adding track to playlist: %v", err)
-		http.Error(w, "Error adding track to playlist", http.StatusInternalServerError)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Уведомляем через WebSocket
-	wsBroadcast <- map[string]string{
-		"type":    "notification",
-		"message": "Трек успешно добавлен в плейлист",
-		"code":    "success",
-	}
-
-	// Перенаправляем на страницу плейлиста после успешного добавления
-	http.Redirect(w, r, "/playlist", http.StatusFound)
+	// Отправляем успешный ответ
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte("Track added successfully"))
 }
 
 // Функция для изменения позиции трека в плейлисте
