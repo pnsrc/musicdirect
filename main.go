@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -943,119 +945,90 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 
 func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
 
-	// Handle preflight OPTIONS request
-	if r.Method == http.MethodOptions {
-		return
-	}
+	// Log the raw request body
+	body, _ := io.ReadAll(r.Body)
+	log.Printf("Received delete request body: %s", string(body))
+	r.Body = io.NopCloser(bytes.NewBuffer(body)) // Restore the body for later use
 
-	// Ensure request method is POST
-	if r.Method != http.MethodPost {
-		sendJSONError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Read and parse request body
 	var requestData struct {
 		TrackID  int    `json:"track_id"`
 		RoomCode string `json:"room_code"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
-		log.Printf("Error decoding request body: %v", err)
-		sendJSONError(w, "Invalid request data", http.StatusBadRequest)
+		log.Printf("Error decoding request: %v", err)
+		http.Error(w, "Invalid request data", http.StatusBadRequest)
 		return
 	}
 
-	// Validate required fields
-	if requestData.TrackID == 0 || requestData.RoomCode == "" {
-		sendJSONError(w, "Missing required fields", http.StatusBadRequest)
+	log.Printf("Decoded request data: track_id=%d, room_code=%s", requestData.TrackID, requestData.RoomCode)
+
+	db, err := openDB()
+	if err != nil {
+		log.Printf("Database connection error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+	defer db.Close()
 
-	// Get room ID from room code
+	// First, check if the room exists
 	var roomID int
-	err := db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
+	err = db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			sendJSONError(w, "Room not found", http.StatusNotFound)
-		} else {
-			log.Printf("Database error getting room: %v", err)
-			sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+			log.Printf("Room not found with code: %s", requestData.RoomCode)
+			http.Error(w, "Room not found", http.StatusNotFound)
+			return
 		}
+		log.Printf("Error querying room: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+	log.Printf("Found room ID: %d for code: %s", roomID, requestData.RoomCode)
 
-	// Begin transaction
-	tx, err := db.Begin()
+	// Check if the track exists in the playlist
+	var exists bool
+	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM playlist WHERE track_id = ? AND room_id = ?)",
+		requestData.TrackID, roomID).Scan(&exists)
 	if err != nil {
-		log.Printf("Error beginning transaction: %v", err)
-		sendJSONError(w, "Internal server error", http.StatusInternalServerError)
+		log.Printf("Error checking track existence: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
-	defer tx.Rollback()
+	if !exists {
+		log.Printf("Track %d not found in room %d", requestData.TrackID, roomID)
+		http.Error(w, "Track not found in playlist", http.StatusNotFound)
+		return
+	}
 
 	// Delete the track
-	result, err := tx.Exec(
-		"DELETE FROM playlist WHERE track_id = ? AND room_id = ?",
-		requestData.TrackID, roomID,
-	)
+	result, err := db.Exec("DELETE FROM playlist WHERE track_id = ? AND room_id = ?",
+		requestData.TrackID, roomID)
 	if err != nil {
-		log.Printf("Error deleting track: %v", err)
-		sendJSONError(w, "Error deleting track", http.StatusInternalServerError)
+		log.Printf("Delete error detail: %v", err)
+		http.Error(w, fmt.Sprintf("Delete error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		log.Printf("Error getting rows affected: %v", err)
-		sendJSONError(w, "Error confirming deletion", http.StatusInternalServerError)
-		return
+	} else {
+		log.Printf("Delete operation affected %d rows", rowsAffected)
 	}
 
-	if rowsAffected == 0 {
-		sendJSONError(w, "Track not found in playlist", http.StatusNotFound)
-		return
+	response := struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}{
+		Success: rowsAffected > 0,
+		Message: fmt.Sprintf("Successfully deleted track from playlist"),
 	}
 
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		log.Printf("Error committing transaction: %v", err)
-		sendJSONError(w, "Error completing deletion", http.StatusInternalServerError)
-		return
-	}
-
-	// Send WebSocket notification if available
-	if wsBroadcast != nil {
-		wsBroadcast <- map[string]interface{}{
-			"type":     "trackDeleted",
-			"trackId":  requestData.TrackID,
-			"roomCode": requestData.RoomCode,
-		}
-	}
-
-	// Send success response
-	response := map[string]interface{}{
-		"success": true,
-		"message": "Track successfully deleted",
-	}
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("Error encoding response: %v", err)
-	}
-}
-
-// Helper function to send JSON error responses
-func sendJSONError(w http.ResponseWriter, message string, status int) {
-	w.WriteHeader(status)
-	response := map[string]interface{}{
-		"success": false,
-		"message": message,
-	}
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding error response: %v", err)
 	}
 }
 
@@ -1456,6 +1429,8 @@ func main() {
 
 	http.HandleFunc("/ws", wsHandler)
 	go wsBroadcastMessages()
+
+	// Разрешить использование cors для всех запросов
 
 	if !dbExists() {
 		http.HandleFunc("/setup", setupHandler)
