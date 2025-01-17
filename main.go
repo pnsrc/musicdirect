@@ -434,12 +434,13 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var tracks []struct {
-		TrackID  int    `json:"track_id"`
-		Title    string `json:"title"`
-		Artist   string `json:"artist"`
-		TrackURL string `json:"track_url"`
-		CoverURI string `json:"cover_uri"`
-		Position int    `json:"position"`
+		TrackID    int    `json:"track_id"`
+		Title      string `json:"title"`
+		Artist     string `json:"artist"`
+		TrackURL   string `json:"track_url"`
+		CoverURI   string `json:"cover_uri"`
+		Position   int    `json:"position"`
+		DurationMs int    `json:"duration_ms"`
 	}
 
 	for rows.Next() {
@@ -474,19 +475,21 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 		coverURI = strings.Replace(coverURI, "%", "", -1)
 
 		tracks = append(tracks, struct {
-			TrackID  int    `json:"track_id"`
-			Title    string `json:"title"`
-			Artist   string `json:"artist"`
-			TrackURL string `json:"track_url"`
-			CoverURI string `json:"cover_uri"`
-			Position int    `json:"position"`
+			TrackID    int    `json:"track_id"`
+			Title      string `json:"title"`
+			Artist     string `json:"artist"`
+			TrackURL   string `json:"track_url"`
+			CoverURI   string `json:"cover_uri"`
+			Position   int    `json:"position"`
+			DurationMs int    `json:"duration_ms"`
 		}{
-			TrackID:  track.TrackID,
-			Title:    title,
-			Artist:   artist,
-			TrackURL: trackURL,
-			CoverURI: coverURI,
-			Position: track.Position, // Теперь position будет корректно передаваться
+			TrackID:    track.TrackID,
+			Title:      title,
+			Artist:     artist,
+			TrackURL:   trackURL,
+			CoverURI:   coverURI,
+			Position:   track.Position, // Теперь position будет корректно передаваться
+			DurationMs: trackInfo.Result[0].DurationMs,
 		})
 	}
 
@@ -505,65 +508,54 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 
 // Обработчик для добавления трека в плейлист
 func addTrackToPlaylistHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		// Чтение данных из тела запроса
-		var requestData struct {
-			TrackURL string `json:"track_url"` // track_url как строка
-		}
-
-		// Декодируем JSON в структуру
-		err := json.NewDecoder(r.Body).Decode(&requestData)
-		if err != nil {
-			log.Printf("Error decoding JSON: %v", err)
-			http.Error(w, "Invalid request data", http.StatusBadRequest)
-			return
-		}
-
-		// Извлекаем track_id из URL
-		trackID, err := extractTrackID(requestData.TrackURL)
-		if err != nil {
-			log.Printf("Error extracting track ID: %v", err)
-			http.Error(w, "Invalid track URL", http.StatusBadRequest)
-			return
-		}
-
-		// Открываем базу данных для добавления трека
-		db, err := openDB()
-		if err != nil {
-			log.Printf("Failed to open database: %v", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-		defer db.Close()
-
-		// Проверка, существует ли уже этот трек в плейлисте
-		var exists bool
-		err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM playlist WHERE track_id = ?)", trackID).Scan(&exists)
-		if err != nil {
-			log.Printf("Error checking if track exists: %v", err)
-			http.Error(w, "Error checking track existence", http.StatusInternalServerError)
-			return
-		}
-
-		if exists {
-			http.Error(w, "Track already exists in the playlist", http.StatusConflict)
-			return
-		}
-
-		// Вставляем трек в таблицу playlist
-		_, err = db.Exec("INSERT INTO playlist (track_id) VALUES (?)", trackID)
-		if err != nil {
-			log.Printf("Error adding track to playlist: %v", err)
-			http.Error(w, "Error adding track to playlist", http.StatusInternalServerError)
-			return
-		}
-
-		// Перенаправляем на страницу плейлиста после успешного добавления
-		http.Redirect(w, r, "/playlist", http.StatusFound)
-	} else {
-		// Если не POST-запрос, показываем ошибку
+	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
 	}
+
+	// Чтение данных из тела запроса
+	var requestData struct {
+		TrackURL string `json:"track_url"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
+		log.Printf("Error decoding JSON: %v", err)
+		http.Error(w, "Invalid request data", http.StatusBadRequest)
+		return
+	}
+
+	// Извлекаем track_id из URL
+	trackID, err := extractTrackID(requestData.TrackURL)
+	if err != nil {
+		log.Printf("Error extracting track ID: %v", err)
+		http.Error(w, "Invalid track URL", http.StatusBadRequest)
+		return
+	}
+
+	// Проверка существования трека в базе данных
+	exists, err := checkTrackExists(trackID, db)
+	if err != nil {
+		log.Printf("Error checking track existence: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if exists {
+		http.Error(w, "Track already exists in the playlist", http.StatusConflict)
+		return
+	}
+
+	// Добавление трека в плейлист
+	err = addTrackToPlaylist(trackID, db)
+	if err != nil {
+		log.Printf("Error adding track to playlist: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Отправляем успешный ответ
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte("Track added successfully"))
 }
 
 // Функция для изменения позиции трека в плейлисте
