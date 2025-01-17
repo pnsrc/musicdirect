@@ -118,58 +118,125 @@ function changeSortKey(newSortKey) {
   loadTrackList();
 }
 
-// Функция для удаления трека
+// Function to delete a track with proper error handling and room code management
 function deleteTrack(trackId) {
-  // Подтверждение удаления
+  // Get room code from URL query parameter or localStorage
+  const urlParams = new URLSearchParams(window.location.search);
+  const roomCode = urlParams.get('room') || localStorage.getItem('roomCode');
+  
+  if (!roomCode) {
+      showNotification('Room code not found', 'error');
+      return;
+  }
+
+  // Confirmation dialog
   if (!confirm('Вы уверены, что хотите удалить этот трек?')) {
       return;
   }
 
-  // Отправка запроса на удаление
+  // Show loading state
+  const trackElement = document.querySelector(`[data-track-id="${trackId}"]`);
+  if (trackElement) {
+      trackElement.style.opacity = '0.5';
+  }
+
+  // Send delete request
   fetch('/api/tracks/delete', {
       method: 'POST',
       headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
       },
       body: JSON.stringify({
-          track_id: trackId,
-          room_code: getRoomCode()
+          track_id: parseInt(trackId), // Ensure trackId is a number
+          room_code: roomCode
       })
   })
   .then(response => {
       if (!response.ok) {
-          throw new Error('Network response was not ok');
+          return response.json().then(data => {
+              throw new Error(data.message || `HTTP error! status: ${response.status}`);
+          });
       }
       return response.json();
   })
   .then(data => {
-      // Если удаление прошло успешно, удаляем элемент из DOM
-      const trackElement = document.querySelector(`[data-track-id="${trackId}"]`);
-      if (trackElement) {
-          trackElement.remove();
+      if (data.success) {
+          // Remove track element from DOM
+          if (trackElement) {
+              trackElement.remove();
+          }
+          
+          // Update playlist counter if it exists
+          updatePlaylistCounter();
+          
+          // Show success notification
+          showNotification('Трек успешно удален', 'success');
+          
+          // Broadcast update to other clients via WebSocket if available
+          if (window.socket && window.socket.readyState === WebSocket.OPEN) {
+              window.socket.send(JSON.stringify({
+                  type: 'trackDeleted',
+                  trackId: trackId,
+                  roomCode: roomCode
+              }));
+          }
+      } else {
+          throw new Error(data.message || 'Failed to delete track');
       }
-      // Показываем уведомление об успешном удалении
-      showNotification('Трек успешно удален');
-      // Обновляем плейлист
-      updatePlaylist();
   })
   .catch(error => {
-      console.error('Error:', error);
-      showNotification('Ошибка при удалении трека', 'error');
+      console.error('Error deleting track:', error);
+      // Restore track element opacity
+      if (trackElement) {
+          trackElement.style.opacity = '1';
+      }
+      showNotification(`Ошибка при удалении трека: ${error.message}`, 'error');
   });
 }
 
-// Вспомогательная функция для показа уведомлений
+// Helper function to update playlist counter
+function updatePlaylistCounter() {
+  const counter = document.querySelector('.playlist-counter');
+  if (counter) {
+      const currentCount = parseInt(counter.textContent) - 1;
+      counter.textContent = currentCount;
+  }
+}
+
+// Helper function to show notifications
 function showNotification(message, type = 'success') {
   const notification = document.createElement('div');
   notification.className = `notification ${type}`;
   notification.textContent = message;
   
+  // Style the notification
+  Object.assign(notification.style, {
+      position: 'fixed',
+      top: '20px',
+      right: '20px',
+      padding: '10px 20px',
+      borderRadius: '4px',
+      backgroundColor: type === 'success' ? '#4CAF50' : '#f44336',
+      color: 'white',
+      zIndex: '1000',
+      opacity: '0',
+      transition: 'opacity 0.3s ease'
+  });
+  
   document.body.appendChild(notification);
   
-  // Удаляем уведомление через 3 секунды
+  // Fade in
   setTimeout(() => {
-      notification.remove();
+      notification.style.opacity = '1';
+  }, 10);
+  
+  // Remove after 3 seconds
+  setTimeout(() => {
+      notification.style.opacity = '0';
+      setTimeout(() => {
+          notification.remove();
+      }, 300);
   }, 3000);
 }
 
