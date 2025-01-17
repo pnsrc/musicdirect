@@ -73,11 +73,12 @@ async function loadTrackList() {
     `;
     trackListContainer.appendChild(sortControls);
 
-    // Add tracks
     tracks.forEach((track, index) => {
       const trackItem = document.createElement('div');
       trackItem.className = 'track';
       trackItem.dataset.index = index;
+      trackItem.dataset.trackId = track.track_id;
+      trackItem.id = `track-${track.id}`;
       trackItem.innerHTML = `
         <img src="https://${track.cover_uri}400x400" alt="${track.title}">
         <div class="track-info">

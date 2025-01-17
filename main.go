@@ -1029,19 +1029,6 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get room ID from room code
-	var roomID int
-	err := db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			sendJSONError(w, "Room not found", http.StatusNotFound)
-		} else {
-			log.Printf("Database error getting room: %v", err)
-			sendJSONError(w, "Internal server error", http.StatusInternalServerError)
-		}
-		return
-	}
-
 	// Begin transaction
 	tx, err := db.Begin()
 	if err != nil {
@@ -1051,10 +1038,28 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Delete the track
+	// First verify the track exists in the playlist for this room
+	var exists bool
+	err = tx.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM playlist p JOIN rooms r ON p.room_id = r.code WHERE p.track_id = ? AND r.code = ?)",
+		requestData.TrackID, requestData.RoomCode,
+	).Scan(&exists)
+
+	if err != nil {
+		log.Printf("Error checking track existence: %v", err)
+		sendJSONError(w, "Error verifying track", http.StatusInternalServerError)
+		return
+	}
+
+	if !exists {
+		sendJSONError(w, "Track not found in playlist", http.StatusNotFound)
+		return
+	}
+
+	// Delete the track using the room code
 	result, err := tx.Exec(
 		"DELETE FROM playlist WHERE track_id = ? AND room_id = ?",
-		requestData.TrackID, roomID,
+		requestData.TrackID, requestData.RoomCode,
 	)
 	if err != nil {
 		log.Printf("Error deleting track: %v", err)
