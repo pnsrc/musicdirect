@@ -529,5 +529,3 @@ function shuffle(array) {
   }
   return shuffled;
 }
-
-document.getElementById('shuffle').addEventListener('click', toggleShuffle);

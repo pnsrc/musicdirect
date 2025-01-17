@@ -942,17 +942,14 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
-	// Устанавливаем CORS и Content-Type заголовки
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
-	// Проверяем метод
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid method", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Читаем тело запроса
 	var requestData struct {
 		TrackID  int    `json:"track_id"`
 		RoomCode string `json:"room_code"`
@@ -964,7 +961,6 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Открываем БД
 	db, err := openDB()
 	if err != nil {
 		log.Printf("Database error: %v", err)
@@ -973,31 +969,23 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer db.Close()
 
-	// Проверяем существование комнаты
-	var roomExists bool
-	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", requestData.RoomCode).Scan(&roomExists)
+	// Get room ID
+	var roomID int
+	err = db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
 	if err != nil {
-		log.Printf("Room check error: %v", err)
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	if !roomExists {
+		log.Printf("Error getting room ID for code %s: %v", requestData.RoomCode, err)
 		http.Error(w, "Room not found", http.StatusNotFound)
 		return
 	}
 
-	// Получаем room_id по room_code
-	var roomID int
-	err = db.QueryRow("SELECT id FROM rooms WHERE code = ?", requestData.RoomCode).Scan(&roomID)
-	if err != nil {
-		log.Printf("Error getting room ID: %v", err)
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
+	// Log the DELETE attempt
+	log.Printf("Attempting to delete track_id=%d from room_id=%d (room_code=%s)",
+		requestData.TrackID, roomID, requestData.RoomCode)
 
-	// Удаляем трек
-	result, err := db.Exec("DELETE FROM playlist WHERE track_id = ? AND room_id = ?",
+	// Delete the track
+	result, err := db.Exec(`
+        DELETE FROM playlist 
+        WHERE track_id = ? AND room_id = ?`,
 		requestData.TrackID, roomID)
 	if err != nil {
 		log.Printf("Delete error: %v", err)
@@ -1005,18 +993,17 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверяем результат
 	rowsAffected, _ := result.RowsAffected()
+	log.Printf("Rows affected by delete: %d", rowsAffected)
 
 	response := struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
 	}{
 		Success: rowsAffected > 0,
-		Message: "Track deleted successfully",
+		Message: fmt.Sprintf("Track deletion affected %d rows", rowsAffected),
 	}
 
-	// Отправляем ответ
 	json.NewEncoder(w).Encode(response)
 }
 
