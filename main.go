@@ -21,7 +21,6 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/gorilla/websocket"
-	_ "github.com/gorilla/websocket"
 	"golang.org/x/exp/rand"
 	_ "modernc.org/sqlite"
 	"pkg.botr.me/yamusic"
@@ -712,6 +711,12 @@ func handleTrackURL(bot *tgbotapi.BotAPI, message *tgbotapi.Message, cfg *Config
 
 // Главная страница
 func indexHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	// Получаем информацию о пользователе с помощью API Яндекс Музыки
@@ -745,6 +750,12 @@ func settingsTemplate(w http.ResponseWriter, r *http.Request) {
 
 // Получение информации о треке
 func getTrackHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	trackID := r.URL.Query().Get("trackID")
@@ -801,6 +812,12 @@ func getTrackHandler(w http.ResponseWriter, r *http.Request) {
 
 // Сохранение настроек API
 func saveSettingsHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	if r.Method == http.MethodPost {
 		token := r.FormValue("token")
 		userID := r.FormValue("userID")
@@ -844,6 +861,12 @@ type AppInfo struct {
 }
 
 func debugHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	startTime := time.Now()
 
 	// Информация о приложении
@@ -922,6 +945,12 @@ func debugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1012,6 +1041,12 @@ func deleteTrackFromPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 
 // Выводим все track_id из базы данных
 func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	// принимаем room_code из запроса
@@ -1086,6 +1121,12 @@ var wsClients = make(map[*websocket.Conn]bool) // Хранение активн�
 var wsBroadcast = make(chan interface{})       // Канал для отправки сообщений клиентам
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v", err)
@@ -1180,6 +1221,12 @@ func getTrackInfo(ctx context.Context, trackID int, client *yamusic.Client) (*Tr
 
 // getTrackInfoHandler handles HTTP requests for track information
 func getTrackInfoHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	// CORS разрешить использование для всех запросов
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
@@ -1220,6 +1267,12 @@ func getTrackInfoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func createRoomHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	db, err := openDB()
 	if err != nil {
 		log.Printf("Failed to open database: %v", err)
@@ -1271,6 +1324,12 @@ func createRoomsTable(db *sql.DB) error {
 }
 
 func joinRoomHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	// Чтение данных из тела запроса
 	var requestData struct {
@@ -1317,6 +1376,12 @@ func generateRoomCode(length int) string {
 }
 
 func getRoomPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+
+	if db == nil || client == nil {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	roomIDStr := r.URL.Query().Get("roomID")
@@ -1394,70 +1459,77 @@ func isExistRoomCode(code string) (bool, error) {
 */
 
 func main() {
-	// Initialize database connection
 	var err error
 	db, err = openDB()
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
-	defer db.Close() // Close database when main exits
+	defer db.Close()
+
+	mux := http.NewServeMux() // Создаем новый мультиплексор
 
 	fs := http.FileServer(http.Dir(staticDir))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
+	mux.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	http.HandleFunc("/ws", wsHandler)
+	mux.HandleFunc("/ws", wsHandler)
 	go wsBroadcastMessages()
 
-	// Разрешить использование cors для всех запросов
+	cfg := &Config{
+		TelegramToken: "YOUR_TELEGRAM",
+		Database:      db,
+		YaMusicClient: client,
+	}
+
+	if cfg.TelegramToken != "" {
+		wg.Add(1)
+		go runTelegramBot(cfg)
+	}
 
 	if !dbExists() {
-		http.HandleFunc("/setup", setupHandler)
+		mux.HandleFunc("/", setupHandler) // Перенаправляем все запросы на setup
+		mux.HandleFunc("/setup", setupHandler)
 		log.Println("Database not found, redirecting to setup page...")
 	} else {
-		http.HandleFunc("/", indexHandler)
-		http.HandleFunc("/debug", debugHandler)
-		http.HandleFunc("/settings", saveSettingsHandler)
-		http.HandleFunc("/page/settings", settingsTemplate)
-		http.HandleFunc("/get-track", getTrackHandler)
-		http.HandleFunc("/playlist", playlistHandler)
-		http.HandleFunc("/add-track", addTrackToPlaylistHandler)
-		http.HandleFunc("/api/tracks", apiTracksHandler)
-		http.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
-		http.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
-		http.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
-		http.HandleFunc("/api/track", getTrackInfoHandler)
-		http.HandleFunc("/api/room/create", createRoomHandler)
-		http.HandleFunc("/api/room/join", joinRoomHandler)
-		http.HandleFunc("/api/room/status", getRoomPlaylistHandler)
+		mux.HandleFunc("/", indexHandler)
+		mux.HandleFunc("/debug", debugHandler)
+		mux.HandleFunc("/settings", saveSettingsHandler)
+		mux.HandleFunc("/page/settings", settingsTemplate)
+		mux.HandleFunc("/get-track", getTrackHandler)
+		mux.HandleFunc("/playlist", playlistHandler)
+		mux.HandleFunc("/add-track", addTrackToPlaylistHandler)
+		mux.HandleFunc("/api/tracks", apiTracksHandler)
+		mux.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
+		mux.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
+		mux.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
 	}
 
 	log.Printf("Starting server on :%d", port)
-	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil); err != nil {
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), mux); err != nil {
 		log.Fatal(err)
 	}
 }
 
 func init() {
-	err := createTableIfNotExists()
-	if err != nil {
-		log.Fatalf("Error creating table: %v", err)
+	if err := createTableIfNotExists(); err != nil {
+		log.Printf("Warning: Error creating table: %v", err)
+		return
 	}
 
 	db, err := openDB()
 	if err != nil {
-		log.Fatal("Failed to open database:", err)
+		log.Printf("Warning: Failed to open database: %v", err)
+		return
 	}
+	defer db.Close()
 
 	var userID int
 	var accessToken string
 
 	row := db.QueryRow("SELECT user_id, access_token FROM settings WHERE id = 2")
-	err = row.Scan(&userID, &accessToken)
-	if err != nil {
+	if err := row.Scan(&userID, &accessToken); err != nil {
 		log.Printf("Warning: Could not load Yandex Music settings: %v", err)
+		return
 	}
 
 	client = yamusic.NewClient(yamusic.AccessToken(userID, accessToken))
-
-	db.Close()
 }
