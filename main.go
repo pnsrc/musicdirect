@@ -430,34 +430,10 @@ func dbExists() bool {
 
 // Обработчик для API /api/tracks
 func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Добавим логирование
+	log.Printf("Fetching tracks from database...")
 
-	// требуем room_code
-	roomCode := r.URL.Query().Get("room_code")
-	if roomCode == "" {
-		http.Error(w, "Room code is required", http.StatusBadRequest)
-		return
-	}
-
-	// проверяем is_room_exists
-	var exists bool
-	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", roomCode).Scan(&exists)
-	if err != nil {
-		log.Printf("Error checking room existence: %v", err)
-		http.Error(w, "Error checking room existence", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	db, err := openDB()
-	if err != nil {
-		log.Fatal("Failed to open database:", err)
-	}
-	defer db.Close()
-
-	// Изменяем запрос для получения track_id и position
-	rows, err := db.Query("SELECT track_id, position FROM playlist WHERE room_id = ? ORDER BY id", roomCode)
+	rows, err := db.Query("SELECT track_id, position FROM playlist ORDER BY position")
 	if err != nil {
 		log.Printf("Error fetching playlist: %v", err)
 		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
@@ -466,13 +442,12 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var tracks []struct {
-		TrackID    int    `json:"track_id"`
-		Title      string `json:"title"`
-		Artist     string `json:"artist"`
-		TrackURL   string `json:"track_url"`
-		CoverURI   string `json:"cover_uri"`
-		Position   int    `json:"position"`
-		DurationMs int    `json:"duration_ms"`
+		TrackID  int    `json:"track_id"`
+		Title    string `json:"title"`
+		Artist   string `json:"artist"`
+		TrackURL string `json:"track_url"`
+		CoverURI string `json:"cover_uri"`
+		Position int    `json:"position"`
 	}
 
 	for rows.Next() {
@@ -480,17 +455,23 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 			TrackID  int
 			Position int
 		}
-		// Сканируем оба поля
+
 		if err := rows.Scan(&track.TrackID, &track.Position); err != nil {
 			log.Printf("Error scanning row: %v", err)
-			http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
-			return
+			continue // Лучше не пропускать, а возвращать ошибку
 		}
 
+		// Добавим логирование для отслеживания запросов к API
+		log.Printf("Fetching info for track %d from Yandex Music API", track.TrackID)
+
 		trackInfo, resp, err := client.Tracks().Get(r.Context(), track.TrackID)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			log.Printf("Error getting track info: %v", err)
-			continue
+		if err != nil {
+			log.Printf("Error getting track info for ID %d: %v", track.TrackID, err)
+			continue // Здесь мы пропускаем трек при ошибке
+		}
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("Bad response status %d for track ID %d", resp.StatusCode, track.TrackID)
+			continue // И здесь тоже пропускаем
 		}
 
 		title := trackInfo.Result[0].Title
@@ -498,8 +479,8 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 
 		trackURL, err := client.Tracks().GetDownloadURL(r.Context(), track.TrackID)
 		if err != nil {
-			log.Printf("Error getting track download URL: %v", err)
-			continue
+			log.Printf("Error getting download URL for track %d: %v", track.TrackID, err)
+			continue // И здесь пропускаем
 		}
 
 		coverURI := trackInfo.Result[0].Albums[0].CoverURI
@@ -507,21 +488,19 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 		coverURI = strings.Replace(coverURI, "%", "", -1)
 
 		tracks = append(tracks, struct {
-			TrackID    int    `json:"track_id"`
-			Title      string `json:"title"`
-			Artist     string `json:"artist"`
-			TrackURL   string `json:"track_url"`
-			CoverURI   string `json:"cover_uri"`
-			Position   int    `json:"position"`
-			DurationMs int    `json:"duration_ms"`
+			TrackID  int    `json:"track_id"`
+			Title    string `json:"title"`
+			Artist   string `json:"artist"`
+			TrackURL string `json:"track_url"`
+			CoverURI string `json:"cover_uri"`
+			Position int    `json:"position"`
 		}{
-			TrackID:    track.TrackID,
-			Title:      title,
-			Artist:     artist,
-			TrackURL:   trackURL,
-			CoverURI:   coverURI,
-			Position:   track.Position, // Теперь position будет корректно передаваться
-			DurationMs: trackInfo.Result[0].DurationMs,
+			TrackID:  track.TrackID,
+			Title:    title,
+			Artist:   artist,
+			TrackURL: trackURL,
+			CoverURI: coverURI,
+			Position: track.Position,
 		})
 	}
 
@@ -530,6 +509,9 @@ func apiTracksHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
 		return
 	}
+
+	// Добавим логирование результата
+	log.Printf("Successfully fetched %d tracks", len(tracks))
 
 	err = json.NewEncoder(w).Encode(tracks)
 	if err != nil {
