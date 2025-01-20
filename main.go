@@ -1483,6 +1483,8 @@ func main() {
 		mux.HandleFunc("/api/tracks/changeposition", changeTrackPosition)
 		mux.HandleFunc("/api/tracks/delete", deleteTrackFromPlaylistHandler)
 		mux.HandleFunc("/api/tracks/all", getDBTracksIDHandler)
+		mux.HandleFunc("/api/room/join", joinRoomHandler)
+		mux.HandleFunc("/api/room/create", createRoomHandler)
 	}
 
 	log.Printf("Starting server on :%d", port)
