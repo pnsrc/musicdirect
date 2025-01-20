@@ -1031,22 +1031,6 @@ func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// принимаем room_code из запроса
-	roomCode := r.URL.Query().Get("room_code")
-	// если room_code не передан, возвращаем ошибку
-	if roomCode == "" {
-		http.Error(w, "Room code is required", http.StatusBadRequest)
-		return
-	}
-
-	var exists bool
-	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM rooms WHERE code = ?)", roomCode).Scan(&exists)
-	if err != nil {
-		log.Printf("Error checking room existence: %v", err)
-		http.Error(w, "Error checking room existence", http.StatusInternalServerError)
-		return
-	}
-
 	// Открываем базу данных
 	db, err := openDB()
 	if err != nil {
@@ -1055,7 +1039,7 @@ func getDBTracksIDHandler(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	// Запрашиваем все track_id
-	rows, err := db.Query("SELECT track_id FROM playlist WHERE room_id = ?", roomCode)
+	rows, err := db.Query("SELECT track_id FROM playlist")
 	if err != nil {
 		log.Printf("Error fetching playlist: %v", err)
 		http.Error(w, "Error fetching playlist", http.StatusInternalServerError)
